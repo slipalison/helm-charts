@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["name", "image", "port", "owner"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+      "maxLength": 40,
+      "description": "Vira nome de namespace: minusculas, numeros e hifen."
+    },
+    "owner": { "type": "string", "minLength": 1 },
+    "image": {
+      "type": "object",
+      "required": ["repository"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": {
+          "type": "string",
+          "not": { "const": "latest" },
+          "description": "Sem :latest. Sem tag fixa nao ha rollback."
+        },
+        "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "host": { "type": "string" },
+    "replicas": { "type": "integer", "minimum": 1 },
+    "canary": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "steps": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1, "maximum": 99 }
+        },
+        "pause": { "type": "string" }
+      }
+    },
+    "instrumentation": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "language": { "enum": ["dotnet", "java", "nodejs", "python", "go"] }
+      }
+    },
+    "database": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "name": { "type": "string" }
+      }
+    },
+    "egress": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["host", "port"],
+        "properties": {
+          "host": { "type": "string" },
+          "port": { "type": "integer" }
+        }
+      }
+    }
+  }
+}

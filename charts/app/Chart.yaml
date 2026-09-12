@@ -1,0 +1,18 @@
+apiVersion: v2
+name: app
+description: >-
+  Caminho dourado para publicar um servico no cluster: Rollout canary com
+  analise por metrica, rota no Istio, NetworkPolicy e AuthorizationPolicy
+  fechadas por padrao, instrumentacao OpenTelemetry e banco no CloudNativePG.
+type: application
+version: 0.1.0
+# A versao da aplicacao vem do values de cada app, nao daqui.
+appVersion: "n/a"
+keywords:
+  - istio
+  - argo-rollouts
+  - canary
+  - opentelemetry
+home: https://github.com/slipalison/helm-charts
+maintainers:
+  - name: Alison Amorim

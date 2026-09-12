@@ -1,0 +1,31 @@
+{{- if and .Values.canary.enabled .Values.canary.analysis.enabled }}
+# A analise e o que separa um canary de uma pausa. Sem ela, 10% dos usuarios
+# recebem a versao nova por dois minutos e ninguem olha o resultado.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: {{ include "app.name" . }}-taxa-de-sucesso
+  namespace: {{ include "app.name" . }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+spec:
+  metrics:
+    - name: taxa-de-sucesso
+      interval: {{ .Values.canary.analysis.interval }}
+      count: {{ .Values.canary.analysis.count }}
+      successCondition: result[0] >= {{ .Values.canary.analysis.successRate }}
+      # Uma medicao ruim pode ser ruido; duas seguidas nao sao.
+      failureLimit: 1
+      provider:
+        prometheus:
+          address: http://mimir.observability.svc.cluster.local:8080/prometheus
+          query: |
+            sum(rate(istio_requests_total{
+              destination_service=~"{{ include "app.name" . }}.{{ include "app.name" . }}.svc.cluster.local",
+              response_code!~"5.*"
+            }[2m]))
+            /
+            clamp_min(sum(rate(istio_requests_total{
+              destination_service=~"{{ include "app.name" . }}.{{ include "app.name" . }}.svc.cluster.local"
+            }[2m])), 0.001)
+{{- end }}

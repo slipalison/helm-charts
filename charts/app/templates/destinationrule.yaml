@@ -1,0 +1,16 @@
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: {{ include "app.name" . }}
+  namespace: {{ include "app.name" . }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+spec:
+  host: {{ include "app.name" . }}
+  subsets:
+    # Rotulos vazios de proposito: quem escreve o pod-template-hash em cada
+    # subset, a cada passo do canary, e o Argo Rollouts.
+    - name: stable
+      labels: {}
+    - name: canary
+      labels: {}

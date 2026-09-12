@@ -1,0 +1,12 @@
+{{- if .Values.podAnnotations }}
+{{- end }}
+# Nao ha Prometheus Operator neste cluster: quem raspa e o Alloy, por anotacao.
+# Este arquivo existe para dizer isso — a anotacao abaixo e o unico contrato.
+#
+#   podAnnotations:
+#     prometheus.io/scrape: "true"
+#     prometheus.io/port: "8080"
+#     prometheus.io/path: /metrics
+#
+# As metricas de requisicao (taxa de erro, latencia, volume) vem do sidecar do
+# Istio sem o app fazer nada; isto aqui e so para metricas de negocio.

@@ -1,0 +1,24 @@
+# Camada 7 do mesmo fechamento: a NetworkPolicy barra pacote, esta barra
+# chamada. Sem ela, um pod comprometido dentro do mesh ainda falaria com este
+# app usando mTLS valido — o mTLS diz quem e, nao o que pode.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ include "app.name" . }}-so-pelo-gateway
+  namespace: {{ include "app.name" . }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "app.selectorLabels" . | nindent 6 }}
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-system/sa/istio-ingressgateway
+    # Sondas e metricas do proprio sidecar.
+    - to:
+        - operation:
+            ports: ["15020", "15021", "15090"]

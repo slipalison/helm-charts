@@ -1,0 +1,16 @@
+# O namespace vem do chart, e nao de CreateNamespace=true, porque os rotulos
+# sao a parte que importa: sem istio-injection nao ha sidecar, e sem o rotulo
+# do Pod Security Standard o 'restricted' nao vale.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "app.name" . }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+    istio-injection: enabled
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    {{- if .Values.database.enabled }}
+    # Chave que a NetworkPolicy do namespace databases exige de quem conecta.
+    db-access: postgres
+    {{- end }}

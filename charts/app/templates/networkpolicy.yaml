@@ -1,0 +1,75 @@
+# Fecha o namespace por padrao. Tudo o que o app precisa alcancar esta
+# declarado: DNS, o coletor de telemetria, o banco (se houver) e os destinos
+# externos listados em .Values.egress.
+#
+# Quando algo parar de funcionar depois de instalar isto, a resposta quase
+# sempre e "faltou declarar o egress" — e essa e a ideia.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "app.name" . }}-padrao
+  namespace: {{ include "app.name" . }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # So o gateway entra. Um pod de outro app nao fala com este diretamente.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+    # E os proprios pods do app, entre si.
+    - from:
+        - podSelector: {}
+  egress:
+    # DNS do cluster.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Plano de controle do Istio e coletor de telemetria.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+    - to:
+        - podSelector: {}
+    {{- if .Values.database.enabled }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.database.clusterNamespace }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- end }}
+    {{- if .Values.egress }}
+    # Destinos externos declarados. Sem IP: o nome e resolvido pelo DNS e o
+    # Istio faz o roteamento; a politica libera a porta.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              # Nunca a rede de casa, nunca a tailnet, nunca a rede das VMs.
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+      ports:
+        {{- range .Values.egress }}
+        - protocol: TCP
+          port: {{ .port }}
+        {{- end }}
+    {{- end }}

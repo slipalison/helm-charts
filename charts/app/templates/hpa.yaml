@@ -1,0 +1,25 @@
+{{- if .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "app.name" . }}
+  namespace: {{ include "app.name" . }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    # O alvo e o Rollout, nao um Deployment: quem controla as replicas aqui e o
+    # Argo Rollouts.
+    apiVersion: argoproj.io/v1alpha1
+    kind: Rollout
+    name: {{ include "app.name" . }}
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}

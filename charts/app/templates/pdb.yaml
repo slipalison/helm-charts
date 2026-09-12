@@ -1,0 +1,16 @@
+{{- if gt (int .Values.replicas) 1 }}
+# Impede que uma drenagem de no leve as duas replicas ao mesmo tempo — que e
+# exatamente o que a atualizacao automatica do K3s faria sem isto.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "app.name" . }}
+  namespace: {{ include "app.name" . }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "app.selectorLabels" . | nindent 6 }}
+{{- end }}

@@ -1,0 +1,16 @@
+{{- if .Values.database.enabled }}
+# Banco declarado junto com o app. O operador cria o banco, o usuario e o
+# Secret com a credencial; o Rollout le esse Secret por envFrom.
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: {{ .Values.database.name | default (include "app.name" .) }}
+  namespace: {{ .Values.database.clusterNamespace }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+spec:
+  name: {{ .Values.database.name | default (include "app.name" .) }}
+  owner: {{ .Values.database.name | default (include "app.name" .) }}
+  cluster:
+    name: {{ .Values.database.cluster }}
+{{- end }}

@@ -1,0 +1,93 @@
+# Valores de um app tipico. O que nao esta aqui e opiniao do chart, nao
+# esquecimento: seguranca, rota, politica de rede e canary nao sao opcionais.
+
+# Nome do app. Vira o nome do namespace, do Service, do Rollout e do host.
+name: meu-app
+
+image:
+  repository: ghcr.io/slipalison/meu-app
+  # Escrita pelo CI a cada build. Nunca 'latest': o Kyverno recusa, e com razao
+  # — sem tag fixa nao existe rollback.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Porta em que o container escuta. O Service publica 80 e traduz para ca.
+port: 8080
+
+# Host publico. O TLS termina na Cloudflare; aqui dentro e HTTP.
+host: ""
+
+replicas: 2
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+# Sondas. O caminho padrao serve para a maioria; troque se o app expoe outro.
+probes:
+  readiness:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  liveness:
+    path: /healthz
+    initialDelaySeconds: 15
+    periodSeconds: 30
+
+canary:
+  enabled: true
+  # Pesos intermediarios, em porcento.
+  steps: [10, 50]
+  # Quanto tempo em cada passo.
+  pause: 2m
+  # Com analise ligada, o Rollout consulta a taxa de sucesso no Mimir em cada
+  # passo e aborta sozinho se cair. Sem ela, o canary e so uma pausa.
+  analysis:
+    enabled: true
+    successRate: 0.99
+    interval: 1m
+    count: 5
+
+instrumentation:
+  enabled: true
+  # dotnet | java | nodejs | python | go
+  language: dotnet
+
+database:
+  enabled: false
+  # Nome do banco e do usuario; a senha e gerada pelo operador e fica num Secret.
+  name: ""
+  cluster: postgres
+  clusterNamespace: databases
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+# Variaveis simples. Segredo vai por SealedSecret, nunca aqui.
+env: []
+# - name: LOG_LEVEL
+#   value: info
+
+envFrom: []
+# - secretRef:
+#     name: meu-app-segredos
+
+# Destinos externos que o app precisa alcancar. Tudo o que nao estiver aqui e
+# barrado pela NetworkPolicy — inclusive coisas que funcionavam antes de a
+# politica existir.
+egress: []
+# - host: api.externa.com
+#   port: 443
+
+# Rotulo obrigatorio pelo Kyverno: de quem e este app.
+owner: alison
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []

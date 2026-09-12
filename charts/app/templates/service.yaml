@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "app.name" . }}
+  namespace: {{ include "app.name" . }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "app.selectorLabels" . | nindent 4 }}
+  ports:
+    # O nome comecando com 'http' e o que faz o Istio tratar isto como HTTP e
+    # produzir metricas de status e latencia. Com outro nome vira TCP opaco e o
+    # canary por metrica nao tem o que medir.
+    - name: http
+      port: 80
+      targetPort: {{ .Values.port }}
+      protocol: TCP
