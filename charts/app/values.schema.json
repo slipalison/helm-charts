@@ -23,7 +23,14 @@
         "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
       }
     },
-    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "command": { "type": "array", "items": { "type": "string" } },
+    "args": { "type": "array", "items": { "type": "string" } },
+    "port": {
+      "type": "integer",
+      "minimum": 1024,
+      "maximum": 65535,
+      "description": "Acima de 1024: o container roda como nao-root e nao pode abrir porta privilegiada."
+    },
     "host": { "type": "string" },
     "replicas": { "type": "integer", "minimum": 1 },
     "canary": {

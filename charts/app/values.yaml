@@ -11,6 +11,12 @@ image:
   tag: ""
   pullPolicy: IfNotPresent
 
+# Substituem o entrypoint/cmd da imagem quando ela nao escuta onde deveria.
+# O caso comum: imagem que so escuta na 80, que um usuario nao-root nao pode
+# abrir. Portas abaixo de 1024 exigem privilegio, e este chart nao da nenhum.
+command: []
+args: []
+
 # Porta em que o container escuta. O Service publica 80 e traduz para ca.
 port: 8080
 

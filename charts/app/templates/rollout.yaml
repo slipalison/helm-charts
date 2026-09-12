@@ -55,6 +55,14 @@ spec:
         - name: {{ include "app.name" . }}
           image: "{{ .Values.image.repository }}:{{ required "image.tag e obrigatorio - o CI escreve este valor a cada build" .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.port }}
