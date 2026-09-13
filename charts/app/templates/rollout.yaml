@@ -66,19 +66,32 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.port }}
-          {{- with .Values.env }}
           env:
+            # A tag da imagem chega ao app como APP_VERSION, sempre. Sem isto,
+            # durante um canary nao ha como a propria aplicacao dizer qual
+            # versao respondeu — e um canary que nao se enxerga nao serve para
+            # decidir nada.
+            - name: APP_VERSION
+              value: {{ .Values.image.tag | quote }}
+            - name: APP_NAME
+              value: {{ include "app.name" . | quote }}
+            {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.envFrom }}
+            {{- end }}
+          {{- if or .Values.envFrom .Values.database.enabled }}
+          # UM envFrom so. Antes havia dois blocos independentes, e um app com
+          # `envFrom` proprio E banco renderizava a chave duas vezes no mesmo
+          # container: YAML com chave repetida, o ultimo vence, o primeiro some
+          # sem erro nenhum.
           envFrom:
+            {{- with .Values.envFrom }}
             {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- if .Values.database.enabled }}
-          envFrom:
+            {{- end }}
+            {{- if .Values.database.enabled }}
             - secretRef:
                 # Criado pelo CloudNativePG com o usuario e a senha do banco.
                 name: {{ .Values.database.cluster }}-app
+            {{- end }}
           {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
