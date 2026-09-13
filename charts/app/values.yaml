@@ -61,10 +61,24 @@ canary:
     interval: 1m
     count: 5
 
+# Telemetria. O chart faz a FIACAO; quem produz o sinal e o SDK dentro do app.
+#
+# Nao ha injecao por webhook neste cluster. O operador do OpenTelemetry foi
+# removido em 2026-09-13 porque o webhook dele ficava com certificado invalido
+# a cada sync do ArgoCD e, com failurePolicy: Ignore, deixava de injetar sem
+# dizer nada — um pod "instrumentado" que nao exportava nada. Ver ADR-001 no
+# README deste chart.
+#
+# Com enabled: true o container recebe OTEL_EXPORTER_OTLP_ENDPOINT,
+# OTEL_EXPORTER_OTLP_PROTOCOL, OTEL_SERVICE_NAME e OTEL_RESOURCE_ATTRIBUTES —
+# os nomes padrao, que todo SDK oficial le sem configuracao extra.
 instrumentation:
   enabled: true
-  # dotnet | java | nodejs | python | go
-  language: dotnet
+  endpoint: http://alloy.observability.svc.cluster.local:4318
+  # http/protobuf e o que o Alloy expoe em 4318. Para gRPC, trocar tambem a
+  # porta para 4317 no endpoint.
+  protocol: http/protobuf
+  environment: producao
 
 database:
   enabled: false

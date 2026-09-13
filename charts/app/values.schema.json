@@ -48,7 +48,9 @@
       "type": "object",
       "properties": {
         "enabled": { "type": "boolean" },
-        "language": { "enum": ["dotnet", "java", "nodejs", "python", "go"] }
+        "endpoint": { "type": "string", "format": "uri" },
+        "protocol": { "enum": ["http/protobuf", "grpc"] },
+        "environment": { "type": "string" }
       }
     },
     "database": {

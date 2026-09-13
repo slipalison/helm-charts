@@ -1,3 +1,4 @@
+{{- include "app.valoresAposentados" . -}}
 apiVersion: argoproj.io/v1alpha1
 kind: Rollout
 metadata:
@@ -19,11 +20,6 @@ spec:
       annotations:
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-        {{- end }}
-        {{- if .Values.instrumentation.enabled }}
-        # O operador do OpenTelemetry le esta anotacao, injeta o agente da
-        # linguagem e aponta o OTLP para o Alloy. O app nao muda.
-        instrumentation.opentelemetry.io/inject-{{ .Values.instrumentation.language }}: "observability/default"
         {{- end }}
     spec:
       serviceAccountName: {{ include "app.name" . }}
@@ -75,6 +71,30 @@ spec:
               value: {{ .Values.image.tag | quote }}
             - name: APP_NAME
               value: {{ include "app.name" . | quote }}
+            {{- if .Values.instrumentation.enabled }}
+            # Fiacao do OpenTelemetry, escrita aqui e nao injetada por webhook.
+            #
+            # Ate 0.1.4 este chart punha a anotacao que mandava o operador do
+            # OpenTelemetry injetar o agente no pod. O webhook desse operador
+            # estava com "tls: bad certificate" e failurePolicy: Ignore — o pod
+            # nascia sem instrumentacao NENHUMA e nada no cluster reclamava. Um
+            # componente que falha calado e pior do que um componente ausente.
+            # O operador foi removido do cluster; ver ADR-001.
+            #
+            # Sao os nomes padrao do OpenTelemetry: qualquer SDK oficial os le
+            # sem configuracao. O app so precisa iniciar o SDK — e se nao
+            # iniciar, estas variaveis nao fazem mal a ninguem.
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.instrumentation.endpoint | quote }}
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: {{ .Values.instrumentation.protocol | quote }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ include "app.name" . | quote }}
+            # service.version e o que liga um trace a uma versao durante o
+            # canary; sem ela os dois lados do rollout viram o mesmo servico.
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "service.version={{ .Values.image.tag }},service.namespace={{ include "app.name" . }},k8s.namespace.name={{ include "app.name" . }},deployment.environment={{ .Values.instrumentation.environment }}"
+            {{- end }}
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
