@@ -138,6 +138,29 @@ O que se perde: instrumentação de app que não pode ser recompilado. Se isso
 voltar a ser necessário, o caminho é cert-manager, e este ADR é o ponto de
 partida.
 
+#### Adendo, 2026-09-13: o cert-manager entrou
+
+A decisão acima continua certa para o que ela decidia, e a premissa dela caiu
+no mesmo dia em que outra coisa precisou do cert-manager.
+
+O `spec.backup.barmanObjectStore` do CloudNativePG foi deprecado no operador
+1.30 e **desaparece no 1.31**. O substituto é o plugin Barman Cloud, que exige
+cert-manager para as CRDs e para o TLS entre o plugin e o operador. O
+argumento que sustentava a recusa era *"nada mais precisa dele, então a troca
+não se paga"* — e isso deixou de ser verdade.
+
+O cert-manager está instalado desde então, em
+[`homelab-gitops/platform/cert-manager/`](https://github.com/slipalison/homelab-gitops).
+**Isto não reabre a injeção por webhook do OpenTelemetry:** o que este chart
+faz continua sendo melhor, porque não depende de operador nenhum estar vivo no
+momento em que o pod nasce. O adendo existe para que ninguém leia o ADR daqui
+a seis meses e conclua que cert-manager foi proibido.
+
+A lição que sobrevive é outra, e é a que importa: webhook com certificado
+inválido e `failurePolicy: Ignore` falha **calado**. O cert-manager é
+exatamente a ferramenta que resolve isso direito, em vez de cada operador
+gerar o próprio certificado no `helm template`.
+
 ### O que mudou no chart
 
 | 0.1.4 | 0.2.0 |
