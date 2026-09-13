@@ -52,6 +52,10 @@ canary:
   # Com analise ligada, o Rollout consulta a taxa de sucesso no Mimir em cada
   # passo e aborta sozinho se cair. Sem ela, o canary e so uma pausa.
   analysis:
+    # Espera antes da primeira medicao: a janela da consulta precisa ter
+    # dado dentro dela. Zero faz a analise perguntar ao Prometheus sobre um
+    # pod que nasceu ha um segundo.
+    initialDelay: 60s
     enabled: true
     successRate: 0.99
     interval: 1m

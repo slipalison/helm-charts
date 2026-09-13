@@ -11,11 +11,24 @@ metadata:
 spec:
   metrics:
     - name: taxa-de-sucesso
+      # Espera antes da primeira medicao. Sem isto, a analise comeca no mesmo
+      # segundo em que o pod novo nasce: a janela de 2 minutos ainda esta quase
+      # vazia e o resultado diz mais sobre o relogio do que sobre a versao.
+      initialDelay: {{ .Values.canary.analysis.initialDelay }}
       interval: {{ .Values.canary.analysis.interval }}
       count: {{ .Values.canary.analysis.count }}
       successCondition: result[0] >= {{ .Values.canary.analysis.successRate }}
       # Uma medicao ruim pode ser ruido; duas seguidas nao sao.
       failureLimit: 1
+      # SEM DADOS NAO E REPROVACAO. A consulta abaixo nao devolve serie nenhuma
+      # quando nao houve requisicao, e o Rollouts conta isso como "Error", nao
+      # como "Failed" — so depois de tres erros seguidos ele desiste.
+      #
+      # A versao anterior usava clamp_min(..., 0.001) no denominador para
+      # evitar divisao por zero, e isso transformava silencio em NOTA ZERO:
+      # bastava existir uma serie antiga com taxa 0 para a razao dar 0 e o
+      # deploy abortar com o app perfeitamente saudavel. Foi medido.
+      consecutiveErrorLimit: 3
       provider:
         prometheus:
           address: http://mimir.observability.svc.cluster.local:8080/prometheus
@@ -25,7 +38,7 @@ spec:
               response_code!~"5.*"
             }[2m]))
             /
-            clamp_min(sum(rate(istio_requests_total{
+            sum(rate(istio_requests_total{
               destination_service=~"{{ include "app.name" . }}.{{ include "app.name" . }}.svc.cluster.local"
-            }[2m])), 0.001)
+            }[2m]))
 {{- end }}
