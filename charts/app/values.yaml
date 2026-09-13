@@ -11,6 +11,12 @@ image:
   tag: ""
   pullPolicy: IfNotPresent
 
+# Versao semantica do app (1.4.0), escrita pelo CI junto com image.tag. E o nome
+# legivel do mesmo bit: vai para APP_VERSION, para service.version nos traces e
+# para o rotulo app.kubernetes.io/version. A tag continua sendo a identidade —
+# dois commits com a mesma versao ainda sao dois deploys. Vazio cai na tag.
+versao: ""
+
 # Substituem o entrypoint/cmd da imagem quando ela nao escuta onde deveria.
 # O caso comum: imagem que so escuta na 80, que um usuario nao-root nao pode
 # abrir. Portas abaixo de 1024 exigem privilegio, e este chart nao da nenhum.

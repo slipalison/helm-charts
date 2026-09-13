@@ -63,12 +63,13 @@ spec:
             - name: http
               containerPort: {{ .Values.port }}
           env:
-            # A tag da imagem chega ao app como APP_VERSION, sempre. Sem isto,
-            # durante um canary nao ha como a propria aplicacao dizer qual
-            # versao respondeu — e um canary que nao se enxerga nao serve para
-            # decidir nada.
+            # A versao chega ao app como APP_VERSION, sempre. Sem isto, durante
+            # um canary nao ha como a propria aplicacao dizer qual versao
+            # respondeu — e um canary que nao se enxerga nao serve para decidir
+            # nada. E a versao semantica que a esteira escreve (1.4.0); sem ela,
+            # a tag da imagem (sha-<commit>).
             - name: APP_VERSION
-              value: {{ .Values.image.tag | quote }}
+              value: {{ .Values.versao | default .Values.image.tag | quote }}
             - name: APP_NAME
               value: {{ include "app.name" . | quote }}
             {{- if .Values.instrumentation.enabled }}
@@ -93,7 +94,7 @@ spec:
             # service.version e o que liga um trace a uma versao durante o
             # canary; sem ela os dois lados do rollout viram o mesmo servico.
             - name: OTEL_RESOURCE_ATTRIBUTES
-              value: "service.version={{ .Values.image.tag }},service.namespace={{ include "app.name" . }},k8s.namespace.name={{ include "app.name" . }},deployment.environment={{ .Values.instrumentation.environment }}"
+              value: "service.version={{ .Values.versao | default .Values.image.tag }},service.namespace={{ include "app.name" . }},k8s.namespace.name={{ include "app.name" . }},deployment.environment={{ .Values.instrumentation.environment }}"
             {{- end }}
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}

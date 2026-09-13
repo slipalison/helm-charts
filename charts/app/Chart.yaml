@@ -5,7 +5,10 @@ description: >-
   analise por metrica, rota no Istio, NetworkPolicy e AuthorizationPolicy
   fechadas por padrao, fiacao do OpenTelemetry e banco no CloudNativePG.
 type: application
-version: 0.2.0
+# 0.0.0 DE PROPOSITO. A versao real vem dos commits (Conventional Commits) e e
+# carimbada pelo CI com `helm package --version` — o ArgoCD le o pacote no
+# GHCR, nao este arquivo. Helm exige o campo; ele nao e a fonte de nada.
+version: 0.0.0
 # A versao da aplicacao vem do values de cada app, nao daqui.
 appVersion: "n/a"
 keywords:

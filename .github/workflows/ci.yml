@@ -1,0 +1,117 @@
+name: CI
+
+# Versao pelos commits, lint, e — na main — o pacote no GHCR, a tag e a release.
+# Tudo num run so. O antigo release.yml esperava a tag chegar (`on: push:
+# tags`); tag criada pelo GITHUB_TOKEN nao dispara workflow nenhum, e agora e a
+# esteira quem cria a tag, entao ele saiu.
+#
+# A VERSAO DO CHART NAO ESTA EM Chart.yaml. La e 0.0.0. `helm package --version`
+# carimba no pacote a versao que a esteira calculou dos commits (feat -> minor,
+# feat! -> major, o resto -> patch), e e o pacote que o ArgoCD le — nao o
+# arquivo. Ninguem escreve numero, e nenhum commit de bot entra na main.
+#
+# Um so chart aqui, uma versao por repositorio. Se um dia houver dois, a versao
+# passa a precisar de escopo por caminho — e ai e outro desenho.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  versao:
+    permissions:
+      contents: read
+    uses: slipalison/github-workflows/.github/workflows/versao.yml@main
+
+  lint:
+    name: Lint e template
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Preparar
+        uses: slipalison/github-workflows/.github/actions/preparar@main
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - name: helm lint
+        run: helm lint charts/app
+      - name: helm template com os valores de exemplo
+        # Lint nao renderiza. Um template que so quebra com valores reais passa
+        # pelo lint sem reclamar.
+        run: |
+          set -euo pipefail
+          helm template exemplo charts/app \
+            --set name=exemplo \
+            --set owner=alison \
+            --set image.repository=ghcr.io/slipalison/exemplo \
+            --set image.tag=sha-abc1234 \
+            --set versao=1.2.3 > /tmp/render.yaml
+          # A versao tem de chegar aos tres lugares; sem ela, a tag.
+          grep -q 'app.kubernetes.io/version: "1.2.3"' /tmp/render.yaml
+          grep -q 'service.version=1.2.3,' /tmp/render.yaml
+          helm template exemplo charts/app \
+            --set name=exemplo \
+            --set owner=alison \
+            --set image.repository=ghcr.io/slipalison/exemplo \
+            --set image.tag=sha-abc1234 > /tmp/render-sem-versao.yaml
+          grep -q 'app.kubernetes.io/version: "sha-abc1234"' /tmp/render-sem-versao.yaml
+
+  publicar:
+    name: Publicar OCI
+    needs: [versao, lint]
+    if: >-
+      github.event_name != 'pull_request'
+      && github.ref == 'refs/heads/main'
+      && needs.versao.outputs.salto != 'nenhum'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Preparar
+        uses: slipalison/github-workflows/.github/actions/preparar@main
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - name: Login no GHCR
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          USUARIO: ${{ github.actor }}
+        run: echo "$TOKEN" | helm registry login ghcr.io -u "$USUARIO" --password-stdin
+      - name: Empacotar e enviar
+        env:
+          VERSAO: ${{ needs.versao.outputs.versao }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSAO" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::versao invalida: $VERSAO"; exit 1; }
+          helm package charts/app --version "$VERSAO"
+          helm push "app-$VERSAO.tgz" oci://ghcr.io/slipalison/charts
+          {
+            echo "## Chart"
+            echo ""
+            echo "\`oci://ghcr.io/slipalison/charts/app\` versao **$VERSAO**"
+            echo ""
+            echo "Para usar: \`targetRevision: $VERSAO\` no ApplicationSet e \`chart_version: \"$VERSAO\"\` no validar-apps do homelab-gitops."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  lancar:
+    # Depois do pacote: a tag e a prova de que aquela versao esta no GHCR.
+    needs: [versao, lint, publicar]
+    if: >-
+      github.event_name != 'pull_request'
+      && github.ref == 'refs/heads/main'
+      && needs.versao.outputs.salto != 'nenhum'
+    permissions:
+      contents: write
+      packages: write
+    uses: slipalison/github-workflows/.github/workflows/lancar.yml@main
+    with:
+      versao: ${{ needs.versao.outputs.versao }}
+      tag: ${{ needs.versao.outputs.tag }}

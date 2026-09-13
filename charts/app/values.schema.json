@@ -23,6 +23,11 @@
         "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
       }
     },
+    "versao": {
+      "type": "string",
+      "pattern": "^([0-9]+\\.[0-9]+\\.[0-9]+)?$",
+      "description": "Versao semantica escrita pelo CI (1.4.0), ou vazio. Nunca a identidade do deploy: isso e image.tag."
+    },
     "command": { "type": "array", "items": { "type": "string" } },
     "args": { "type": "array", "items": { "type": "string" } },
     "port": {
