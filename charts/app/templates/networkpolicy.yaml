@@ -25,6 +25,24 @@ spec:
     # E os proprios pods do app, entre si.
     - from:
         - podSelector: {}
+    # O Alloy, para RASPAR METRICAS. Sem esta regra a anotacao
+    # prometheus.io/scrape deste chart e decorativa: o alvo aparece em
+    # `up`, com valor 0, e nenhuma metrica do app chega ao Mimir. Foi medido —
+    # `up{namespace="<app>"}` era 0 nos dois jobs.
+    #
+    # 15020 e o endpoint MESCLADO do sidecar: com enablePrometheusMerge (padrao
+    # do Istio), o proprio istiod reescreve a anotacao do pod para essa porta, e
+    # o que sai de la e Envoy + aplicacao no mesmo texto. A porta do app entra
+    # junto para o caso de um pod sem sidecar.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - protocol: TCP
+          port: 15020
+        - protocol: TCP
+          port: {{ .Values.port }}
   egress:
     # DNS do cluster.
     - to:
