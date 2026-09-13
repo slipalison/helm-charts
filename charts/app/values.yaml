@@ -88,10 +88,26 @@ instrumentation:
 
 database:
   enabled: false
-  # Nome do banco e do usuario; a senha e gerada pelo operador e fica num Secret.
+  # Nome do BANCO. O padrao e o nome do app. O nome do USUARIO nao sai daqui:
+  # e sempre o nome do app, para que um values nao consiga declarar uma role
+  # chamada `postgres` com senha conhecida.
   name: ""
   cluster: postgres
   clusterNamespace: databases
+  # Teto de conexoes desta role. O cluster inteiro tem max_connections: 100 e
+  # o Postgres nao reserva cota por usuario — um app com pool mal configurado
+  # consome o cluster inteiro e derruba os outros, inclusive o proprio
+  # operador. Este numero e o que impede isso.
+  connectionLimit: 20
+
+# LIGAR O BANCO NUM APP: nao basta `enabled: true`. A senha precisa existir
+# selada em DOIS namespaces (em `databases`, para o operador criar a role; no
+# namespace do app, para o pod ler). O script faz os dois de uma vez e nunca
+# mostra a senha:
+#
+#   ./setup-k8s-platform.sh --only pgapp --pg-app meu-app
+#
+# Sem isso o pod nasce em CreateContainerConfigError e a role nao e criada.
 
 autoscaling:
   enabled: false

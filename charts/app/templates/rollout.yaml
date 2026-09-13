@@ -99,20 +99,64 @@ spec:
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if or .Values.envFrom .Values.database.enabled }}
-          # UM envFrom so. Antes havia dois blocos independentes, e um app com
-          # `envFrom` proprio E banco renderizava a chave duas vezes no mesmo
-          # container: YAML com chave repetida, o ultimo vence, o primeiro some
-          # sem erro nenhum.
-          envFrom:
-            {{- with .Values.envFrom }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
             {{- if .Values.database.enabled }}
-            - secretRef:
-                # Criado pelo CloudNativePG com o usuario e a senha do banco.
-                name: {{ .Values.database.cluster }}-app
+            # Banco. O que o chart JA SABE vai em texto puro: endereco, porta e
+            # nome do banco nao sao segredo e nao ganham nada em virar Secret.
+            #
+            # `-rw` e o Service do primario: num failover ele segue sozinho.
+            # Apontar para o pod, ou para o `-ro`, e como se descobre tarde que
+            # o app nao consegue escrever.
+            - name: PGHOST
+              value: {{ include "app.dbHost" . | quote }}
+            - name: PGPORT
+              value: "5432"
+            - name: PGDATABASE
+              value: {{ include "app.dbName" . | quote }}
+            # O CNPG serve TLS. `require` cifra sem conferir quem esta do outro
+            # lado — os pods do banco ficam fora da malha do Istio (o namespace
+            # `databases` nao tem istio-injection), entao esta e a unica camada
+            # que existe aqui. Para `verify-full` seria preciso distribuir o
+            # `postgres-ca` ao app; ainda nao e o caso.
+            - name: PGSSLMODE
+              value: require
+            # E o que E segredo vem do Secret <app>-db, NO NAMESPACE DO APP.
+            #
+            # Ate o chart 0.3.0 esta linha era `envFrom: secretRef:
+            # postgres-app` — um Secret do namespace `databases`. Secret nao
+            # atravessa namespace: o pod pararia em CreateContainerConfigError.
+            # E `postgres-app` e a credencial unica do usuario `app` do
+            # bootstrap, comum a todos os apps.
+            #
+            # Chave por chave, e nao `envFrom`, por dois motivos: o nome da
+            # variavel passa a ser escolha do chart, e uma chave que falte
+            # DERRUBA o pod em vez de sumir calada.
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "app.dbSecret" . }}
+                  key: username
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "app.dbSecret" . }}
+                  key: password
+            # A string montada, nos dois dialetos. Ela e montada no momento de
+            # selar, e nao aqui, porque a senha e a unica parte que falta e ela
+            # nunca passa pelo values.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "app.dbSecret" . }}
+                  key: DATABASE_URL
+            - name: ConnectionStrings__Default
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "app.dbSecret" . }}
+                  key: ConnectionStrings__Default
             {{- end }}
+          {{- with .Values.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
           {{- end }}
           securityContext:
             allowPrivilegeEscalation: false

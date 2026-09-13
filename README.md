@@ -35,6 +35,62 @@ port: 8080
 O `ApplicationSet` do `homelab-gitops` encontra o diretorio e cria o
 Application sozinho. Nao ha passo manual.
 
+### Banco de dados
+
+`database.enabled: true` declara, no namespace do Cluster, **uma role e um
+banco só daquele app** — e liga o pod à credencial certa:
+
+```yaml
+database:
+  enabled: true
+  name: ""              # vazio = nome do app
+  connectionLimit: 20   # o cluster inteiro tem max_connections: 100
+```
+
+O pod recebe `PGHOST`, `PGPORT`, `PGDATABASE` e `PGSSLMODE` em texto puro — o
+chart já sabe esses valores, e eles não ganham nada em virar Secret — mais
+`PGUSER`, `PGPASSWORD`, `DATABASE_URL` e `ConnectionStrings__Default` vindos do
+Secret `<app>-db`, **do próprio namespace**.
+
+Não basta o `enabled: true`. A senha precisa existir selada nos dois lados, e
+quem faz isso é um comando só, que a sorteia e nunca a mostra:
+
+```bash
+setup-k8s-platform.sh --only pgapp --pg-app meu-app
+```
+
+O nome da role **não sai do values**: é sempre o nome do app. Se saísse, um
+`database.name: postgres` distraído — ou um pull request de terceiro —
+declararia uma role chamada `postgres` com senha conhecida, e o operador
+aplicaria `ALTER ROLE` no superusuário do cluster.
+
+#### O que estava errado antes do 0.4.0
+
+Este caminho existia desde o 0.1.x e **nunca funcionou**. Ninguém percebeu
+porque `database.enabled` era `false` nos dois apps: um caminho que nunca
+rodou não está certo, está por testar. Eram três defeitos empilhados, todos
+medidos no cluster:
+
+| O que o chart fazia | O que acontecia |
+|---|---|
+| `Database` com `owner: <app>` | O CRD **não cria role** — "Maps to the `OWNER` parameter of `CREATE DATABASE`". Sem a role, `ERROR: role "<app>" does not exist` (SQLSTATE 42704) |
+| `envFrom: secretRef: postgres-app` | `postgres-app` vive em `databases`; o Rollout nasce no namespace do app. Secret não atravessa namespace: `CreateContainerConfigError` |
+| ...e mesmo que atravessasse | `postgres-app` é a credencial única do usuário `app` do bootstrap, comum a todos — sem isolamento nenhum |
+
+O `Database` agora vem acompanhado de um `DatabaseRole`, que é o CRD que
+realmente cria a role, com `superuser`, `createdb`, `createrole`, `bypassrls`
+e `replication` fixos em `false`.
+
+Os dois objetos usam `retain`: apagar o diretório do app em `apps/` faz o
+ArgoCD podar os CRs, e `delete` mandaria o operador executar `DROP DATABASE`.
+Um diretório removido por engano não apaga dado.
+
+Uma ressalva honesta: `argocd.argoproj.io/sync-wave` no `Database` ordena o
+*apply*, não a *aplicação em Postgres* — o ArgoCD trata CR desconhecido como
+saudável na hora. Quem garante a ordem é o próprio CNPG, que reprocessa: o
+banco falha uma vez com "role does not exist" e nasce na tentativa seguinte,
+medido em ~20 s.
+
 ### O que o chart NAO deixa voce fazer
 
 Por desenho, e cada um ja custou caro a alguem:

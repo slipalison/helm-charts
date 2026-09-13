@@ -42,3 +42,29 @@ operador veio consertar. Entao aqui o render PARA.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Nome do Secret com a credencial do banco. O MESMO nome nos dois namespaces:
+em `databases` ele alimenta o DatabaseRole, no namespace do app ele alimenta o
+Rollout. Sao dois SealedSecrets distintos — um blob selado para um namespace
+nao decifra em outro, e essa e a protecao — com a mesma senha dentro.
+*/}}
+{{- define "app.dbSecret" -}}
+{{- printf "%s-db" (include "app.name" .) -}}
+{{- end -}}
+
+{{/*
+Nome do banco. Sai do values, mas o padrao e o nome do app.
+*/}}
+{{- define "app.dbName" -}}
+{{- .Values.database.name | default (include "app.name" .) -}}
+{{- end -}}
+
+{{/*
+Host do banco dentro do cluster. `-rw` e o Service que o CNPG aponta para o
+primario; num failover ele segue o primario novo sozinho. Usar o nome do pod ou
+o `-ro` aqui e como o app descobre, tarde, que nao consegue escrever.
+*/}}
+{{- define "app.dbHost" -}}
+{{- printf "%s-rw.%s.svc.cluster.local" .Values.database.cluster .Values.database.clusterNamespace -}}
+{{- end -}}

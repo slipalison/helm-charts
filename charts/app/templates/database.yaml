@@ -1,16 +1,84 @@
 {{- if .Values.database.enabled }}
-# Banco declarado junto com o app. O operador cria o banco, o usuario e o
-# Secret com a credencial; o Rollout le esse Secret por envFrom.
+{{- $app := include "app.name" . -}}
+{{- $banco := .Values.database.name | default $app -}}
+{{- if has $banco (list "postgres" "template0" "template1" "app") -}}
+{{- fail (printf "database.name: '%s' e um banco do proprio cluster. Escolha outro nome." $banco) -}}
+{{- end -}}
+# Banco E usuario, declarados junto com o app, os dois no namespace do Cluster.
+#
+# HISTORIA, porque o desenho anterior nao funcionava e ninguem descobriu:
+# ate o chart 0.3.0 havia so o `Database` aqui, com `owner: <app>`, e o Rollout
+# montava `envFrom: secretRef: postgres-app`. Nenhuma das duas metades podia dar
+# certo:
+#
+#   1. o CRD `Database` NAO cria role. O campo `owner` diz, literalmente,
+#      "Maps to the OWNER parameter of CREATE DATABASE" — e `CREATE DATABASE x
+#      OWNER y` com `y` inexistente para com `role "y" does not exist`. As unicas
+#      roles do cluster eram postgres, app, streaming_replica e
+#      cnpg_metrics_exporter;
+#   2. `postgres-app` vive em `databases` e o Rollout nasce no namespace do app.
+#      Secret e objeto de namespace: a referencia nao atravessa. O pod ficaria em
+#      CreateContainerConfigError;
+#   3. e mesmo que atravessasse, `postgres-app` e a credencial do usuario `app`
+#      do bootstrap — UMA so, comum a todos. Cada app enxergaria o banco de todos
+#      os outros.
+#
+# Nada disso apareceu porque `database.enabled` era `false` nos dois apps. Um
+# caminho que nunca rodou nao esta certo: esta por testar.
 apiVersion: postgresql.cnpg.io/v1
-kind: Database
+kind: DatabaseRole
 metadata:
-  name: {{ .Values.database.name | default (include "app.name" .) }}
+  name: {{ $app }}
   namespace: {{ .Values.database.clusterNamespace }}
   labels:
     {{- include "app.labels" . | nindent 4 }}
 spec:
-  name: {{ .Values.database.name | default (include "app.name" .) }}
-  owner: {{ .Values.database.name | default (include "app.name" .) }}
   cluster:
     name: {{ .Values.database.cluster }}
+  # O nome da role e SEMPRE o nome do app, e nao sai do values de proposito.
+  # Se saisse, um `database.name: postgres` distraido — ou um pull request de
+  # terceiro — declararia uma role chamada `postgres` com senha conhecida, e o
+  # operador aplicaria ALTER ROLE no superusuario do cluster.
+  name: {{ $app }}
+  ensure: present
+  login: true
+  # A senha vem do SealedSecret <app>-db, em `databases`. Formato basic-auth,
+  # com `username` e `password` — o operador exige os dois campos.
+  passwordSecret:
+    name: {{ include "app.dbSecret" . }}
+  # Explicito porque o padrao nao se le num code review. Nenhuma destas e
+  # necessaria para um app dono do proprio banco, e cada uma delas e um caminho
+  # para sair do proprio banco.
+  superuser: false
+  createdb: false
+  createrole: false
+  bypassrls: false
+  replication: false
+  inherit: true
+  connectionLimit: {{ .Values.database.connectionLimit }}
+  # `retain`: apagar o diretorio do app em apps/ faz o ArgoCD podar ESTE objeto,
+  # e `delete` mandaria o operador executar DROP ROLE no banco. Um diretorio
+  # removido por engano nao pode apagar dado.
+  databaseRoleReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: {{ $banco }}
+  namespace: {{ .Values.database.clusterNamespace }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+  annotations:
+    # O banco so pode ser criado depois que a role existe: `CREATE DATABASE ...
+    # OWNER <role>` falha se ela nao estiver la. Sao dois objetos independentes
+    # para o ArgoCD, entao a ordem precisa ser dita.
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  cluster:
+    name: {{ .Values.database.cluster }}
+  name: {{ $banco }}
+  owner: {{ $app }}
+  ensure: present
+  # Mesmo motivo do `retain` acima, e aqui o que se perde e o dado.
+  databaseReclaimPolicy: retain
 {{- end }}

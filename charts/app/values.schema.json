@@ -60,9 +60,23 @@
     },
     "database": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" },
-        "name": { "type": "string" }
+        "name": {
+          "type": "string",
+          "pattern": "^([a-z][a-z0-9_-]{0,62})?$",
+          "not": { "enum": ["postgres", "template0", "template1", "app"] },
+          "description": "Nome do banco. Vazio = nome do app. Hifen e aceito porque o padrao e o nome do app e o CNPG cita o identificador; em SQL escrito a mao ele precisa de aspas duplas."
+        },
+        "cluster": { "type": "string", "minLength": 1 },
+        "clusterNamespace": { "type": "string", "minLength": 1 },
+        "connectionLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 80,
+          "description": "O cluster tem max_connections: 100. Deixar um app chegar perto disso e deixa-lo derrubar os outros."
+        }
       }
     },
     "egress": {
