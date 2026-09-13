@@ -48,11 +48,26 @@ Por desenho, e cada um ja custou caro a alguem:
 
 ### Publicar uma versao
 
-```bash
-git tag v0.1.0 && git push --tags
+Commitar na `main` com a mensagem no padrao Conventional Commits. E so.
+
+```
+feat(app): ...    -> 0.3.0 -> 0.4.0
+fix(app): ...     -> 0.3.0 -> 0.3.1
+feat(app)!: ...   -> 0.3.0 -> 1.0.0
 ```
 
-O workflow empacota, valida e envia para `oci://ghcr.io/slipalison/charts`.
+A esteira (`.github/workflows/ci.yml`, sobre `slipalison/github-workflows`)
+calcula a versao pelos commits desde a ultima tag, faz lint, empacota com
+`helm package --version`, envia para `oci://ghcr.io/slipalison/charts`, e SO
+ENTAO cria a tag `vX.Y.Z` e a release. Commit fora do padrao reprova o run.
+
+`Chart.yaml` diz `version: 0.0.0` de proposito: a versao real e carimbada no
+pacote, e o ArgoCD le o pacote. Nao crie tag a mao — uma tag manual entra na
+conta da esteira e desloca a numeracao.
+
+Depois de publicar, o `homelab-gitops` precisa apontar para a versao nova em
+dois lugares: `targetRevision` no `apps/applicationset.yaml` e `chart_version`
+no `validar-apps.yml`.
 
 ---
 
