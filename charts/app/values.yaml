@@ -10,6 +10,15 @@ image:
   # — sem tag fixa nao existe rollback.
   tag: ""
   pullPolicy: IfNotPresent
+  # Nome de um Secret `kubernetes.io/dockerconfigjson` NO NAMESPACE DO APP, para
+  # quando o pacote da imagem e privado. Vazio = registry publico, que e o caso
+  # de todo app cujo repositorio e publico.
+  #
+  # O Secret nao e criado aqui: ele nasce de um SealedSecret em
+  # `homelab-gitops/apps/<app>/`, pelo mesmo motivo da credencial do banco — o
+  # chart e publico e um blob selado so decifra no namespace para o qual foi
+  # selado. A receita esta no README.
+  pullSecret: ""
 
 # Versao semantica do app (1.4.0), escrita pelo CI junto com image.tag. E o nome
 # legivel do mesmo bit: vai para APP_VERSION, para service.version nos traces e

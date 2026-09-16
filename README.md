@@ -35,6 +35,43 @@ port: 8080
 O `ApplicationSet` do `homelab-gitops` encontra o diretorio e cria o
 Application sozinho. Nao ha passo manual.
 
+### Registry privado
+
+Repositorio privado no GitHub gera **pacote privado no GHCR**. O cluster nao
+tem conta no GitHub, entao o `kubelet` recebe `denied` e o pod fica em
+`ImagePullBackOff` — com uma mensagem que parece dizer que a imagem nao existe.
+
+```yaml
+image:
+  repository: ghcr.io/slipalison/meu-app
+  pullSecret: ghcr-pull     # nome do Secret, no namespace do app
+```
+
+O Secret nasce de um SealedSecret junto do app, e **nao** do chart: o chart e
+publico, e um blob selado so decifra no namespace para o qual foi selado — a
+mesma razao da credencial do banco.
+
+```bash
+# no pve, com um PAT de escopo `read:packages` E SO ELE
+kubectl create secret docker-registry ghcr-pull \
+  --namespace meu-app \
+  --docker-server=ghcr.io \
+  --docker-username=slipalison \
+  --docker-password="$PAT" \
+  --dry-run=client -o yaml \
+| kubeseal --format yaml --controller-namespace kube-system \
+> homelab-gitops/apps/meu-app/ghcr-pull.yaml
+```
+
+O `--namespace` importa duas vezes: ele decide onde o Secret nasce **e** entra
+no selo. Selar para o namespace errado produz um arquivo que aplica sem erro e
+nunca vira Secret.
+
+A alternativa e tornar o pacote publico (Packages > Package settings >
+Change visibility), e ai `pullSecret` fica vazio. Troca conhecida: some a
+credencial para rotacionar, e a imagem passa a ser legivel por qualquer um —
+inclusive o binario de um repositorio que se escolheu manter privado.
+
 ### Banco de dados
 
 `database.enabled: true` declara, no namespace do Cluster, **uma role e um
