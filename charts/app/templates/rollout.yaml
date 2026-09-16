@@ -23,6 +23,15 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "app.name" . }}
+      {{- with .Values.image.pullSecret }}
+      # Registry privado. Quem puxa a imagem e o kubelet, e nao o pod: este
+      # Secret nao passa por NetworkPolicy nem pela ServiceAccount do app, e
+      # precisa existir no MESMO namespace do Rollout — Secret nao atravessa
+      # namespace. Sem ele, um pacote privado no GHCR da ImagePullBackOff com
+      # "denied", que se le como imagem inexistente.
+      imagePullSecrets:
+        - name: {{ . }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
