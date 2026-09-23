@@ -72,6 +72,33 @@ Change visibility), e ai `pullSecret` fica vazio. Troca conhecida: some a
 credencial para rotacionar, e a imagem passa a ser legivel por qualquer um —
 inclusive o binario de um repositorio que se escolheu manter privado.
 
+### Sondas num listener interno
+
+Por padrao as duas sondas batem em `port`, a mesma porta do trafego. O app que
+serve `/healthz` e `/readyz` num listener **interno** — fora da porta que o
+gateway alcanca — diz qual e:
+
+```yaml
+port: 8080          # o que a internet alcanca
+probes:
+  port: 9090        # so as sondas
+podAnnotations:
+  prometheus.io/port: "9090"   # se /metrics mora no mesmo listener interno
+```
+
+Sem `probes.port`, o render sai **identico** ao de antes do campo existir —
+nenhum outro app muda.
+
+A raspagem da porta interna **nao passa pela NetworkPolicy**. Com
+`enablePrometheusMerge` (padrao do Istio, e o `istiod` deste cluster nao o
+desliga), o injetor reescreve a anotacao do pod para o endpoint mesclado do
+sidecar, 15020, que e a porta que a regra do `observability` libera; e o
+proprio sidecar busca a porta interna por `localhost`, dentro do pod. As
+sondas seguem o mesmo caminho: o Istio as reescreve para a 15020 e o agente
+chama a porta interna localmente. Sem sidecar a porta interna nao seria
+raspada — e o chart so publica app com sidecar (`namespace.yaml` liga
+`istio-injection`).
+
 ### Banco de dados
 
 `database.enabled: true` declara, no namespace do Cluster, **uma role e um
