@@ -38,6 +38,17 @@
     },
     "host": { "type": "string" },
     "replicas": { "type": "integer", "minimum": 1 },
+    "probes": {
+      "type": "object",
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 65535,
+          "description": "Porta das duas sondas. Ausente = port. Para o app que serve as sondas num listener interno, fora da porta que o gateway alcanca."
+        }
+      }
+    },
     "canary": {
       "type": "object",
       "properties": {

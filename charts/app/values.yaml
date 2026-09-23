@@ -49,6 +49,12 @@ resources:
 
 # Sondas. O caminho padrao serve para a maioria; troque se o app expoe outro.
 probes:
+  # Porta das duas sondas. Ausente = `port`, a do trafego, que e o caso de quase
+  # todo app. Para o app que serve as sondas num listener INTERNO, que o gateway
+  # nao alcanca — o basalto responde /healthz e /readyz so na 9090, e na 8080
+  # devolve 404. Comentado de proposito: a ausencia e o padrao, e um `port:`
+  # vazio aqui seria recusado pelo schema (tem de ser inteiro).
+  # port: 9090
   readiness:
     path: /healthz
     initialDelaySeconds: 5

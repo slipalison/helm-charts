@@ -63,6 +63,22 @@ jobs:
             --set image.repository=ghcr.io/slipalison/exemplo \
             --set image.tag=sha-abc1234 > /tmp/render-sem-versao.yaml
           grep -q 'app.kubernetes.io/version: "sha-abc1234"' /tmp/render-sem-versao.yaml
+          # `probes.port` nas duas direcoes. Sem o campo, as DUAS sondas batem
+          # em `port` — e o que mantem o render de todo app igual ao de antes
+          # dele existir. Com o campo, mudam as duas sondas e mais nenhuma
+          # linha: a porta da NetworkPolicy, que tambem e `port`, fica onde
+          # esta. O arquivo inteiro tem tres `port: 8080`, entao a leitura e
+          # pelas linhas das sondas, e nao pela contagem da porta.
+          sondas() { grep -A3 -E '^ +(readiness|liveness)Probe:$' "$1" | grep -oE 'port: [0-9]+' | paste -sd, -; }
+          [ "$(sondas /tmp/render-sem-versao.yaml)" = "port: 8080,port: 8080" ]
+          helm template exemplo charts/app \
+            --set name=exemplo \
+            --set owner=alison \
+            --set image.repository=ghcr.io/slipalison/exemplo \
+            --set image.tag=sha-abc1234 \
+            --set probes.port=9090 > /tmp/render-sondas.yaml
+          [ "$(sondas /tmp/render-sondas.yaml)" = "port: 9090,port: 9090" ]
+          [ "$(diff /tmp/render-sem-versao.yaml /tmp/render-sondas.yaml | grep -c '^[<>]')" = 4 ]
 
   publicar:
     name: Publicar OCI

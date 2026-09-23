@@ -68,3 +68,21 @@ o `-ro` aqui e como o app descobre, tarde, que nao consegue escrever.
 {{- define "app.dbHost" -}}
 {{- printf "%s-rw.%s.svc.cluster.local" .Values.database.cluster .Values.database.clusterNamespace -}}
 {{- end -}}
+
+{{/*
+Porta das duas sondas. Sem `probes.port` no values, e `port` — a mesma do
+trafego, que e o caso de quase todo app, e o render sai byte a byte igual ao
+de antes deste campo existir.
+
+Existe para o app que serve as sondas num listener INTERNO, fora da porta que
+o gateway alcanca. O basalto, desde a fase `borda-e-casca`: `/healthz`,
+`/readyz` e `/metrics` so respondem na 9090, e a 8080 devolve 404 para as tres.
+Sondar a 8080 nesse app daria um pod que nunca fica pronto.
+
+Um helper, e nao a expressao repetida nas duas sondas: readiness e liveness
+apontando para portas diferentes e o tipo de divergencia que ninguem ve ate o
+pod ser morto pela sonda errada.
+*/}}
+{{- define "app.probePort" -}}
+{{- .Values.probes.port | default .Values.port -}}
+{{- end -}}

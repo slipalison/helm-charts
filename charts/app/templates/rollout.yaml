@@ -177,13 +177,13 @@ spec:
           readinessProbe:
             httpGet:
               path: {{ .Values.probes.readiness.path }}
-              port: {{ .Values.port }}
+              port: {{ include "app.probePort" . }}
             initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
           livenessProbe:
             httpGet:
               path: {{ .Values.probes.liveness.path }}
-              port: {{ .Values.port }}
+              port: {{ include "app.probePort" . }}
             initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
           volumeMounts:
