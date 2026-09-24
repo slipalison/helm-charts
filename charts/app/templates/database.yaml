@@ -1,4 +1,4 @@
-{{- if .Values.database.enabled }}
+{{- if and .Values.database.enabled (not (include "app.emPreview" .)) }}
 {{- $app := include "app.name" . -}}
 {{- $banco := .Values.database.name | default $app -}}
 {{- if has $banco (list "postgres" "template0" "template1" "app") -}}
@@ -81,4 +81,67 @@ spec:
   ensure: present
   # Mesmo motivo do `retain` acima, e aqui o que se perde e o dado.
   databaseReclaimPolicy: retain
+{{- end }}
+{{- if include "app.bancoPreview" . }}
+{{- $app := include "app.name" . }}
+# BANCO EFEMERO DO PREVIEW. Um Cluster do CNPG com uma instancia, DENTRO do
+# namespace do preview — e nao um `Database` no cluster compartilhado, por tres
+# motivos:
+#
+#   1. morre com o namespace. O `Database` compartilhado usa `retain` (acima), e
+#      um banco por pull request sobraria no Postgres de producao para sempre;
+#   2. a credencial nasce sozinha: o CNPG sorteia a senha e grava o Secret
+#      `banco-app`. O compartilhado exige selar a senha a mao (`--only pgapp`),
+#      o que um PR aberto as 23h nao vai esperar;
+#   3. o preview NAO ALCANCA o banco de producao: o namespace dele nao leva o
+#      rotulo `db-access: postgres`, que e o unico que a NetworkPolicy de
+#      `databases` deixa entrar.
+#
+# Nasce vazio. As migrations do app rodam no arranque, como numa instalacao do
+# zero; dado de producao nunca vem para ca.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: banco
+  namespace: {{ $app }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+  annotations:
+    # Antes do Rollout: o ArgoCD so passa para a onda seguinte com o Cluster
+    # saudavel, entao o app nasce com o banco de pe em vez de reiniciar em
+    # CreateContainerConfigError esperando o Secret.
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  instances: 1
+  # A mesma imagem do cluster de producao (platform/postgres/manifests/
+  # cluster.yaml). A trava do distros-setup compara as duas.
+  imageName: {{ .Values.preview.banco.imagem }}
+  # Um PDB numa instancia unica trava a drenagem do no — e o
+  # system-upgrade-controller drena no para atualizar o K3s. Banco de preview
+  # e descartavel; o upgrade do cluster nao.
+  enablePDB: false
+  # Os pods do banco ficam FORA do mesh, como os de `databases`: com sidecar, o
+  # Job do initdb nunca termina (o Envoy segue de pe depois do processo). E os
+  # rotulos que o Kyverno exige de todo pod (`exige-rotulos`) chegam por aqui.
+  inheritedMetadata:
+    labels:
+      app.kubernetes.io/name: {{ $app }}-banco
+      owner: {{ .Values.owner }}
+    annotations:
+      sidecar.istio.io/inject: "false"
+  bootstrap:
+    initdb:
+      # Banco e dono com o nome de PRODUCAO, e nao `app`: o app que tem o nome
+      # do banco escrito em algum lugar funciona igual nos dois ambientes.
+      database: {{ include "app.dbName" . }}
+      owner: {{ include "app.nomeBase" . }}
+  storage:
+    size: {{ .Values.preview.banco.tamanho }}
+    storageClass: local-path
+  resources:
+    {{- toYaml .Values.preview.banco.resources | nindent 4 }}
+  postgresql:
+    parameters:
+      shared_buffers: 32MB
+      max_connections: "30"
 {{- end }}

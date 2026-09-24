@@ -12,7 +12,18 @@ metadata:
   labels:
     {{- include "app.labels" . | nindent 4 }}
 spec:
+  {{- if include "app.bancoPreview" . }}
+  # No preview com banco, os pods do CNPG moram neste namespace e ficam FORA
+  # desta politica: ela so libera DNS, Istio e telemetria, e o banco precisa
+  # falar com o apiserver (o gerenciador de instancia le o proprio Cluster) e
+  # receber o operador. A politica deles e a `-banco`, logo abaixo.
+  podSelector:
+    matchExpressions:
+      - key: cnpg.io/cluster
+        operator: DoesNotExist
+  {{- else }}
   podSelector: {}
+  {{- end }}
   policyTypes:
     - Ingress
     - Egress
@@ -64,7 +75,7 @@ spec:
               kubernetes.io/metadata.name: observability
     - to:
         - podSelector: {}
-    {{- if .Values.database.enabled }}
+    {{- if and .Values.database.enabled (not (include "app.emPreview" .)) }}
     - to:
         - namespaceSelector:
             matchLabels:
@@ -91,3 +102,46 @@ spec:
           port: {{ .port }}
         {{- end }}
     {{- end }}
+{{- if include "app.bancoPreview" . }}
+---
+# O banco efemero do preview. Espelha a politica do cluster de producao
+# (homelab-gitops, platform/postgres/manifests/cluster.yaml), incluindo a licao
+# registrada la: o operador le o status na 8000, e nao na 5432 — so com a 5432
+# liberada o Cluster fica preso em "HTTP communication issue", sem erro no log.
+#
+# So Ingress, como la. A saida fica livre porque o gerenciador de instancia fala
+# com o apiserver, e o apiserver e IP de no na porta 6443 — nada que esta
+# politica consiga nomear sem fixar os IPs das VMs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "app.name" . }}-banco
+  namespace: {{ include "app.name" . }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: banco
+  policyTypes:
+    - Ingress
+  ingress:
+    # O app, so na porta do banco.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "app.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    # O operador: status na 8000, e 5432 para as checagens de SQL.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cnpg-system
+      ports:
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 5432
+{{- end }}

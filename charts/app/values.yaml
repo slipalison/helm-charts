@@ -149,6 +149,39 @@ egress: []
 # Rotulo obrigatorio pelo Kyverno: de quem e este app.
 owner: alison
 
+# AMBIENTE DE PREVIEW — um ambiente efemero por pull request.
+#
+# `numero` e `tag` sao escritos SO pelo ApplicationSet `previews` do
+# homelab-gitops, a partir do pull request; nunca a mao. Com `numero` vazio o
+# chart e o de producao, e o render sai igual ao de antes deste bloco existir.
+#
+# No preview o chart muda, e so isto:
+#   - nome, namespace e host viram `pr-<numero>-<name>` (e `host` e ignorado);
+#   - a imagem e `pr-<numero>-<7 do head>`, e ela vira a versao anunciada;
+#   - uma replica, sem canary, sem HPA, sem PDB;
+#   - com `database.enabled`, um Postgres efemero DENTRO do namespace, e nunca o
+#     banco de producao — que fica ate fora de alcance de rede;
+#   - `preview.env` sobrepoe o `env` pelo nome.
+# Desenho completo: distros-setup/proxmox/PLANO-PREVIEW.md.
+preview:
+  numero: ""
+  tag: ""
+  # Diferencas do preview em relacao a producao, como MAPA nome: valor. Um
+  # mapa, e nao lista, porque o Helm substitui listas inteiras: um `env:` aqui
+  # apagaria as variaveis de producao. Ex.: o client_id de um login de teste.
+  env: {}
+  banco:
+    # A mesma imagem do cluster de producao (homelab-gitops,
+    # platform/postgres/manifests/cluster.yaml). Mudou la, muda aqui.
+    imagem: ghcr.io/cloudnative-pg/postgresql:17.6
+    tamanho: 1Gi
+    resources:
+      requests:
+        cpu: 20m
+        memory: 96Mi
+      limits:
+        memory: 256Mi
+
 podAnnotations: {}
 nodeSelector: {}
 tolerations: []

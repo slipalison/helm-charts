@@ -80,6 +80,66 @@ jobs:
           [ "$(sondas /tmp/render-sondas.yaml)" = "port: 9090,port: 9090" ]
           [ "$(diff /tmp/render-sem-versao.yaml /tmp/render-sondas.yaml | grep -c '^[<>]')" = 4 ]
 
+      - name: Modo preview
+        # O preview e o mesmo chart com um bloco a mais. Duas perguntas:
+        # producao continua igual, e o preview sai com o que o desenho promete
+        # (distros-setup/proxmox/PLANO-PREVIEW.md). O render de producao dos
+        # apps reais contra a versao anterior foi conferido byte a byte antes do
+        # merge; aqui fica o que da para afirmar sem a versao anterior.
+        run: |
+          set -euo pipefail
+          base=(--set name=exemplo --set owner=alison
+                --set image.repository=ghcr.io/slipalison/exemplo
+                --set image.tag=sha-abc1234 --set versao=1.2.3
+                --set host=exemplo.alisonamorim.com
+                --set database.enabled=true --set autoscaling.enabled=true
+                --set 'env[0].name=A' --set 'env[0].value=producao'
+                --set 'env[1].name=B' --set 'env[1].value=fica')
+          helm template exemplo charts/app "${base[@]}" > /tmp/prod.yaml
+          # Bloco presente mas vazio = producao, sem uma linha de diferenca.
+          helm template exemplo charts/app "${base[@]}" --set preview.numero= > /tmp/prod-vazio.yaml
+          diff /tmp/prod.yaml /tmp/prod-vazio.yaml
+
+          helm template pr-42-exemplo charts/app "${base[@]}" \
+            --set preview.numero=42 --set preview.tag=pr-42-abcdef0 \
+            --set preview.env.A=preview --set preview.env.C=nova > /tmp/pv.yaml
+          python3 - <<'FIMPY'
+          import yaml
+          docs = [d for d in yaml.safe_load_all(open("/tmp/pv.yaml")) if d]
+          kinds = sorted(d["kind"] for d in docs)
+          por = {d["kind"]: d for d in docs}
+          def falha(m): raise SystemExit("FALHA: " + m)
+          for d in docs:
+              ns = d["metadata"].get("namespace", d["metadata"]["name"])
+              if ns != "pr-42-exemplo": falha(f'{d["kind"]} fora do namespace do preview: {ns}')
+          for k in ("DatabaseRole", "Database", "PodDisruptionBudget", "HorizontalPodAutoscaler", "AnalysisTemplate"):
+              if k in kinds: falha(f"{k} nao existe no preview")
+          if "Cluster" not in kinds: falha("banco efemero ausente")
+          ro = por["Rollout"]; c = ro["spec"]["template"]["spec"]["containers"][0]
+          if ro["spec"]["replicas"] != 1: falha("preview tem uma replica")
+          if "blueGreen" not in ro["spec"]["strategy"]: falha("preview nao tem canary")
+          if not c["image"].endswith(":pr-42-abcdef0"): falha("imagem do PR")
+          env = [(e["name"], e.get("value")) for e in c["env"]]
+          nomes = [n for n, _ in env]
+          if ("A", "preview") not in env or ("B", "fica") not in env or ("C", "nova") not in env:
+              falha(f"preview.env mescla pelo nome: {env}")
+          if nomes.count("A") != 1: falha("variavel duplicada")
+          if por["VirtualService"]["spec"]["hosts"] != ["pr-42-exemplo.alisonamorim.com"]:
+              falha("o host de producao nao pode ir para o preview")
+          lab = por["Namespace"]["metadata"]["labels"]
+          if "db-access" in lab: falha("o preview nao alcanca o banco de producao")
+          if lab.get("preview.alisonamorim.com/origem") != "exemplo": falha("rotulo de origem")
+          print("preview ok:", kinds)
+          FIMPY
+
+          # E o que o preview tem de RECUSAR, cada um com o seu motivo.
+          recusa() { if helm template x charts/app "${base[@]}" "$@" >/dev/null 2>&1; then echo "::error::aceitou: $*"; exit 1; fi; }
+          recusa --set preview.numero=42 --set preview.tag=pr-41-abcdef0  # tag de outro PR
+          recusa --set preview.numero=42 --set preview.tag=sha-abcdef0    # imagem de producao
+          recusa --set preview.numero=42                                  # sem tag
+          recusa --set preview.numero=1234 --set preview.tag=pr-1234-abcdef0 \
+                 --set name=um-nome-de-aplicacao-comprido-demais         # passa de 40
+
   publicar:
     name: Publicar OCI
     needs: [versao, lint]
@@ -114,7 +174,7 @@ jobs:
             echo ""
             echo "\`oci://ghcr.io/slipalison/charts/app\` versao **$VERSAO**"
             echo ""
-            echo "Para usar: \`targetRevision: $VERSAO\` no ApplicationSet e \`chart_version: \"$VERSAO\"\` no validar-apps do homelab-gitops."
+            echo "Para usar: \`targetRevision: $VERSAO\` em apps/applicationset.yaml do homelab-gitops — o unico lugar; o validar-apps e o ApplicationSet previews leem dali."
           } >> "$GITHUB_STEP_SUMMARY"
 
   lancar:

@@ -5,12 +5,27 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: {{ include "app.name" . }}
+  {{- if include "app.emPreview" . }}
+  annotations:
+    # Antes do banco efemero (onda -1), que mora aqui dentro. Em producao o
+    # namespace fica na onda padrao: nada nele depende de ordem.
+    argocd.argoproj.io/sync-wave: "-2"
+  {{- end }}
   labels:
     {{- include "app.labels" . | nindent 4 }}
     istio-injection: enabled
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/enforce-version: latest
-    {{- if .Values.database.enabled }}
+    {{- if and .Values.database.enabled (not (include "app.emPreview" .)) }}
+    {{- /* O preview NUNCA recebe este rotulo: o banco dele e o efemero, e sem
+    ele o banco de producao fica fora de alcance ate para codigo que tente. */}}
     # Chave que a NetworkPolicy do namespace databases exige de quem conecta.
     db-access: postgres
+    {{- end }}
+    {{- if include "app.emPreview" . }}
+    # Quem le estes dois e o Kyverno (policy `preview-ambiente`): copia para ca
+    # os Secrets do app de ORIGEM marcados com `preview.alisonamorim.com/copiar`,
+    # e poe cota e limites no namespace.
+    preview.alisonamorim.com/origem: {{ include "app.nomeBase" . }}
+    preview.alisonamorim.com/numero: {{ .Values.preview.numero | quote }}
     {{- end }}
