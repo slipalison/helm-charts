@@ -1,4 +1,4 @@
-{{- if and .Values.canary.enabled .Values.canary.analysis.enabled }}
+{{- if and (include "app.canary" .) .Values.canary.analysis.enabled }}
 # A analise e o que separa um canary de uma pausa. Sem ela, 10% dos usuarios
 # recebem a versao nova por dois minutos e ninguem olha o resultado.
 apiVersion: argoproj.io/v1alpha1

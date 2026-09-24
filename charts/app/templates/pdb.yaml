@@ -1,4 +1,4 @@
-{{- if gt (int .Values.replicas) 1 }}
+{{- if gt (int (include "app.replicas" .)) 1 }}
 # Impede que uma drenagem de no leve as duas replicas ao mesmo tempo — que e
 # exatamente o que a atualizacao automatica do K3s faria sem isto.
 apiVersion: policy/v1

@@ -100,6 +100,37 @@
           "port": { "type": "integer" }
         }
       }
+    },
+    "preview": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Ambiente de preview por pull request. numero e tag sao escritos pelo ApplicationSet previews do homelab-gitops; vazio = producao.",
+      "properties": {
+        "numero": {
+          "type": ["string", "integer"],
+          "pattern": "^[0-9]*$",
+          "description": "Numero do pull request. Vazio = producao."
+        },
+        "tag": {
+          "type": "string",
+          "pattern": "^(pr-[0-9]+-[0-9a-f]{7})?$",
+          "description": "Tag da imagem do PR, pr-<numero>-<7 do head>, publicada pelo build-push.yml do github-workflows."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "number", "boolean"] },
+          "description": "Mapa nome: valor que sobrepoe o env pelo nome, so no preview. Mapa porque o Helm substitui listas inteiras."
+        },
+        "banco": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "imagem": { "type": "string", "pattern": "^ghcr\\.io/cloudnative-pg/postgresql:[0-9][0-9.]*$" },
+            "tamanho": { "type": "string", "pattern": "^[0-9]+(Mi|Gi)$" },
+            "resources": { "type": "object" }
+          }
+        }
+      }
     }
   }
 }

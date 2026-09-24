@@ -155,6 +155,46 @@ saudável na hora. Quem garante a ordem é o próprio CNPG, que reprocessa: o
 banco falha uma vez com "role does not exist" e nasce na tentativa seguinte,
 medido em ~20 s.
 
+### Preview: um ambiente por pull request
+
+O mesmo chart, com um bloco a mais. Quem preenche o bloco e o ApplicationSet
+`previews` do `homelab-gitops`, a partir do pull request — nunca a mao:
+
+```yaml
+preview:
+  numero: "42"            # o ApplicationSet escreve
+  tag: pr-42-abcdef0      # o ApplicationSet escreve; a esteira publica
+  env:                    # opcional, no apps/<app>/preview.yaml do gitops
+    AUTH0_CLIENT_ID: <cliente de teste>
+```
+
+Com `numero` vazio o chart e o de producao, e o render sai **byte a byte
+igual** ao de antes deste bloco existir — conferido em `basalto`, `demo-python`,
+`whoami` e num exemplo com banco e HPA, na versao 0.6.0 contra a nova. Com
+`numero`, muda isto e so isto:
+
+| | Producao | Preview |
+|---|---|---|
+| Nome, namespace | `name` | `pr-<numero>-<name>` — falha acima de 40 caracteres, em vez de truncar |
+| Host | `host`, ou `<name>.alisonamorim.com` | sempre `pr-<numero>-<name>.alisonamorim.com`; o `host` do values e ignorado, senao o preview disputaria o host de producao no gateway |
+| Imagem e versao | `image.tag`, `versao` | `preview.tag`, que precisa ser `pr-<numero>-<7 hex>` |
+| Replicas | `replicas`, canary, HPA, PDB | 1, troca direta, sem HPA, sem PDB |
+| Banco | `Database` + `DatabaseRole` no cluster compartilhado | um `Cluster` do CNPG **dentro do namespace**, que morre com ele; o namespace nao ganha `db-access`, entao o banco de producao fica fora de alcance de rede |
+| `env` | a lista | a lista, com `preview.env` sobrepondo **pelo nome** |
+| Telemetria | `deployment.environment=producao` | `preview`, e o `service.name` e o do preview |
+
+O banco efemero sai com o nome do banco e o dono de producao, credencial no
+Secret `banco-app` que o CNPG gera, e `DATABASE_URL` /
+`ConnectionStrings__Default` montadas no mesmo formato do `--only pgapp`. Os
+pods dele ficam fora do mesh (com sidecar, o Job do initdb nao termina) e fora
+da NetworkPolicy padrao — a deles e a `-banco`, espelho da de `databases`.
+
+`preview.env` e um mapa, e nao uma lista, porque o Helm substitui listas: um
+`env:` no values do preview apagaria as variaveis de producao.
+
+O desenho inteiro, com o que o app precisa ter para entrar, esta em
+`distros-setup/proxmox/PLANO-PREVIEW.md`.
+
 ### O que o chart NAO deixa voce fazer
 
 Por desenho, e cada um ja custou caro a alguem:
@@ -185,9 +225,9 @@ ENTAO cria a tag `vX.Y.Z` e a release. Commit fora do padrao reprova o run.
 pacote, e o ArgoCD le o pacote. Nao crie tag a mao — uma tag manual entra na
 conta da esteira e desloca a numeracao.
 
-Depois de publicar, o `homelab-gitops` precisa apontar para a versao nova em
-dois lugares: `targetRevision` no `apps/applicationset.yaml` e `chart_version`
-no `validar-apps.yml`.
+Depois de publicar, o `homelab-gitops` aponta para a versao nova em UM lugar:
+`targetRevision` no `apps/applicationset.yaml`. O `validar-apps.yml` e o
+ApplicationSet `previews` leem a versao dali.
 
 ---
 
