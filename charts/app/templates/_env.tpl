@@ -13,6 +13,9 @@ Parametros, num dict:
   ctx          o contexto raiz (`.`)
   segredoBanco o Secret de onde saem PGUSER, PGPASSWORD, DATABASE_URL e
                ConnectionStrings__Default (no preview, sempre o `banco-app`)
+  semEnvDoApp  true deixa de fora o `env` do values e as sobreposicoes do
+               preview: e o Job de migracao, que so precisa do banco e nao
+               deve receber as credenciais do app
 */}}
 {{- define "app.env" -}}
 {{- $c := .ctx -}}
@@ -59,7 +62,9 @@ producao, e o app subiria sem metade da configuracao. Em producao nada disto
 roda.
 */}}
 {{- $env := $c.Values.env | default list }}
-{{- if include "app.emPreview" $c }}
+{{- if .semEnvDoApp }}
+{{- $env = list }}
+{{- else if include "app.emPreview" $c }}
 {{- $sobre := include "app.sobreposicoesPreview" $c | fromYaml }}
 {{- $saida := list }}
 {{- $nomes := list }}

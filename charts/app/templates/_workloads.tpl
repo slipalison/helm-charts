@@ -85,7 +85,8 @@ Parametros, num dict: `ctx`, `onde` (para a mensagem), `base` (texto) e
 {{- end -}}
 
 {{/*
-Os componentes que falam com o banco alem do app: o nome de cada worker. No
+Os componentes que falam com o banco alem do app: o nome de cada worker, e
+`migration` com o Job de migracao ligado. No
 preview, a NetworkPolicy do banco efemero (`-banco`) deixa entrar estes pods
 pela 5432, alem dos do app. Devolve YAML (lista); vazio quando nao ha nenhum.
 */}}
@@ -96,5 +97,33 @@ pela 5432, alem dos do app. Devolve YAML (lista); vazio quando nao ha nenhum.
 {{- $lista = append $lista $nome -}}
 {{- end -}}
 {{- end -}}
+{{- if include "app.migracao" . -}}
+{{- $lista = append $lista "migration" -}}
+{{- end -}}
 {{- toYaml $lista -}}
+{{- end -}}
+
+{{/*
+"sim" com o Job de migracao ligado.
+*/}}
+{{- define "app.migracao" -}}
+{{- if and .Values.migration .Values.migration.enabled -}}sim{{- end -}}
+{{- end -}}
+
+{{/*
+A ONDA do Rollout e dos workers no preview com Job de migracao.
+
+Em producao o Job e um gancho PreSync: o Argo CD o roda e espera terminar
+antes de aplicar qualquer outra coisa, e o Rollout nao precisa de onda. No
+preview isso nao serve: o namespace e o banco efemero nascem NO MESMO sync
+(ondas -2 e -1), e um PreSync rodaria antes de os dois existirem. Ali o Job e
+um gancho Sync na onda 1, depois da NetworkPolicy e da ServiceAccount (onda
+0), e o app e os workers vao para a onda 2: so sobem com o esquema migrado.
+
+Vazio em producao e sem migracao: o render nao muda.
+*/}}
+{{- define "app.ondaDosWorkloads" -}}
+{{- if and (include "app.migracao" .) (include "app.emPreview" .) -}}
+argocd.argoproj.io/sync-wave: "2"
+{{- end -}}
 {{- end -}}

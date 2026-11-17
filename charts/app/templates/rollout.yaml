@@ -6,6 +6,10 @@ metadata:
   namespace: {{ include "app.name" . }}
   labels:
     {{- include "app.labels" . | nindent 4 }}
+  {{- with include "app.ondaDosWorkloads" . }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
 spec:
   replicas: {{ include "app.replicas" . }}
   revisionHistoryLimit: 3

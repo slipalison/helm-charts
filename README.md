@@ -19,6 +19,7 @@ produz:
 | `PodDisruptionBudget` | Uma drenagem de no nao leva as duas replicas juntas |
 | `Database` do CloudNativePG | Banco, usuario e Secret criados com o app |
 | `Deployment` por worker, opcional | O mesmo binario em outro papel, com os cuidados do app e nenhuma porta de entrada |
+| `Job` de migracao, opcional | O esquema muda num gancho do Argo CD, com credencial propria; o app fica sem DDL |
 | Variaveis `OTEL_*` apontando para o Alloy | O SDK do app acha o coletor sozinho, sem configuracao |
 
 ### Usar
@@ -297,6 +298,63 @@ recusaria o pod, com o apply verde), um `env` que nomeia variavel do chart
 (`DATABASE_URL` inclusive: a credencial muda por `database.secret`, que no
 preview da lugar ao banco efemero) e o nome `migration`, que e do Job de
 migracao.
+
+### Job de migracao: o esquema muda com credencial propria
+
+`migration` declara um Job que roda a migracao do banco com uma credencial
+**so dele** — a da role dona do esquema. E o que deixa o app rodar com uma
+role sem DDL: quem cria e altera tabela e o Job, e a credencial dele nao chega
+a pod nenhum do app.
+
+```yaml
+database:
+  enabled: true           # obrigatorio
+migration:
+  enabled: true
+  args: ["migrate"]       # obrigatorio: command ou args
+  database:
+    secret: meu-app-dono-db   # obrigatorio em producao; ignorado no preview
+  resources: {}           # vazio = os do app
+  env: []                 # por cima do que o chart escreve, pelo nome
+  backoffLimit: 0         # quem tenta de novo e o retry do sync
+  activeDeadlineSeconds: 600
+```
+
+O Secret de `database.secret` fica no namespace do app, no mesmo formato do
+`<app>-db` (`username`, `password`, `DATABASE_URL`,
+`ConnectionStrings__Default`), e nasce de um SealedSecret, como ele. O chart
+nao cria a role dona: ela e da plataforma do banco.
+
+| | Producao | Preview |
+|---|---|---|
+| Gancho do Argo CD | `PreSync`: roda e termina antes de qualquer outro objeto do sync; se falha, o sync para e a imagem nova nao sobe | `Sync`, onda 1; o Rollout e os workers vao para a onda 2 |
+| Por que diferente | — | O namespace (onda -2) e o banco efemero (onda -1) nascem no mesmo sync, e um `PreSync` rodaria antes de os dois existirem |
+| Credencial | `migration.database.secret` | `banco-app`, a do banco efemero |
+| Job anterior | `BeforeHookCreation`: apagado quando o proximo nasce; o ultimo fica, com o log | igual |
+
+O Job recebe a versao, a fiacao do OpenTelemetry, o endereco do banco, a
+credencial e `migration.env` — e **nao** recebe o `env` nem o `envFrom` do app:
+as chaves e credenciais do app nao tem o que fazer numa migracao. Fica na
+malha, com o sidecar **nativo** (`sidecar.istio.io/nativeSidecar: "true"`):
+o proxy sai quando o container termina. Sem sidecar nativo o Envoy seguiria de
+pe e o Job so acabaria no `activeDeadlineSeconds`, como falha. Uma
+AuthorizationPolicy `<name>-migration-sem-entrada` fecha a entrada, e no
+preview a NetworkPolicy `-banco` deixa o Job entrar pela 5432.
+
+Duas ressalvas, ditas de proposito:
+
+- **No primeiro sync de um app novo, o `PreSync` nao tem onde rodar**: o
+  namespace e do chart e so nasce na fase Sync, e o sync para no gancho antes
+  de chegar la — o retry repete a mesma falha. Ligue `migration` num app que
+  ja sincronizou uma vez. O preview nao tem esse problema, pelo gancho `Sync`.
+- **A imagem nova migra antes de o canary comecar.** Durante o canary, os pods
+  da versao anterior rodam sobre o esquema novo: a migracao precisa ser
+  compativel com a versao anterior (expandir antes, contrair num deploy
+  seguinte).
+
+Recusa no render: `migration` sem `database.enabled`, sem `command` nem `args`
+(rodaria o app, que nao termina), sem `database.secret` em producao, com
+recursos incompletos ou com `env` que nomeia variavel do chart.
 
 ### O que o chart NAO deixa voce fazer
 

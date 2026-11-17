@@ -259,6 +259,81 @@ jobs:
           recusa "invalid propertyName 'migration'" --set 'workers.migration.args[0]=w'
           recusa "invalid propertyName 'Fila'" --set 'workers.Fila.args[0]=w'
 
+      - name: Job de migracao
+        # O esquema muda num Job com credencial propria, para o app rodar sem
+        # DDL. Producao: gancho PreSync. Preview: gancho Sync depois do banco
+        # efemero, com o app uma onda depois. Desligado, nada muda.
+        run: |
+          set -euo pipefail
+          # Um diretorio por run, e nao um caminho fixo: o validar-local roda
+          # estes passos no host, onde o /tmp sobrevive entre rodadas.
+          export T="${RUNNER_TEMP:-$(mktemp -d)}"
+          base=(--set name=exemplo --set owner=equipe
+                --set image.repository=ghcr.io/slipalison/exemplo
+                --set image.tag=sha-abc1234 --set versao=1.2.3
+                --set database.enabled=true
+                --set 'env[0].name=SO_DO_APP' --set 'env[0].value=x'
+                --set 'envFrom[0].secretRef.name=exemplo-segredos')
+          mg=(--set migration.enabled=true --set 'migration.args[0]=migrate'
+              --set migration.database.secret=exemplo-dono-db
+              --set 'migration.env[0].name=MODO' --set 'migration.env[0].value=migracao')
+          pv=(--set preview.numero=42 --set preview.tag=pr-42-abcdef0)
+          helm template exemplo charts/app "${base[@]}" > "$T/mg-sem.yaml"
+          helm template exemplo charts/app "${base[@]}" --set migration.enabled=false --set 'migration.args[0]=migrate' > "$T/mg-desligado.yaml"
+          diff "$T/mg-sem.yaml" "$T/mg-desligado.yaml"
+          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" > "$T/mg-pv-sem.yaml"
+          if grep -q '^kind: Job$' "$T/mg-sem.yaml" "$T/mg-pv-sem.yaml"; then echo "::error::Job sem migration"; exit 1; fi
+          helm template exemplo charts/app "${base[@]}" "${mg[@]}" > "$T/mg.yaml"
+          helm template pr-42-exemplo charts/app "${base[@]}" "${mg[@]}" "${pv[@]}" --set 'workers.fila.args[0]=w' > "$T/mg-pv.yaml"
+          python3 - <<'FIMPY'
+          import os, yaml
+          T = os.environ["T"]
+          def falha(m): raise SystemExit("FALHA: " + m)
+          for arq, pv in ((f"{T}/mg.yaml", False), (f"{T}/mg-pv.yaml", True)):
+              docs = [d for d in yaml.safe_load_all(open(arq)) if d]
+              app = "pr-42-exemplo" if pv else "exemplo"
+              jobs = [d for d in docs if d["kind"] == "Job"]
+              if [j["metadata"]["name"] for j in jobs] != [app + "-migration"]: falha(f"{arq}: jobs")
+              j = jobs[0]; an = j["metadata"]["annotations"]; pod = j["spec"]["template"]
+              c = pod["spec"]["containers"][0]
+              ro = next(d for d in docs if d["kind"] == "Rollout")
+              if an.get("argocd.argoproj.io/hook-delete-policy") != "BeforeHookCreation": falha("apaga o Job anterior")
+              if pv:
+                  if an.get("argocd.argoproj.io/hook") != "Sync" or an.get("argocd.argoproj.io/sync-wave") != "1": falha(f"gancho do preview: {an}")
+                  for d in docs:
+                      if d["kind"] in ("Rollout", "Deployment") and d["metadata"].get("annotations", {}).get("argocd.argoproj.io/sync-wave") != "2":
+                          falha(f"{d['kind']} tem de vir depois da migracao")
+              else:
+                  if an.get("argocd.argoproj.io/hook") != "PreSync" or "argocd.argoproj.io/sync-wave" in an: falha(f"gancho de producao: {an}")
+                  if "annotations" in ro["metadata"]: falha("o Rollout de producao nao muda")
+              if c["image"] != ro["spec"]["template"]["spec"]["containers"][0]["image"]: falha("a imagem e a do app")
+              if c["args"] != ["migrate"]: falha("args")
+              if pod["spec"]["restartPolicy"] != "Never": falha("restartPolicy")
+              if pod["metadata"]["annotations"] != {"sidecar.istio.io/nativeSidecar": "true"}: falha("sidecar nativo, senao o Job nao termina")
+              if pod["spec"]["securityContext"] != ro["spec"]["template"]["spec"]["securityContext"]: falha("securityContext")
+              if "envFrom" in c: falha("o Job nao recebe o envFrom do app")
+              env = {e["name"]: e for e in c["env"]}
+              if "SO_DO_APP" in env: falha("o Job nao recebe o env do app")
+              if env.get("MODO", {}).get("value") != "migracao": falha("env proprio")
+              segredo = "banco-app" if pv else "exemplo-dono-db"
+              for k in ("PGUSER", "PGPASSWORD"):
+                  if env[k]["valueFrom"]["secretKeyRef"]["name"] != segredo: falha(f"{k}: {env[k]}")
+              if not pv and env["DATABASE_URL"]["valueFrom"]["secretKeyRef"]["name"] != segredo: falha("DATABASE_URL")
+              if pv and "exemplo-dono-db" in open(arq).read(): falha("credencial de producao da migracao no preview")
+              aps = [d for d in docs if d["kind"] == "AuthorizationPolicy" and d["spec"]["selector"]["matchLabels"] == {"app": app + "-migration"}]
+              if len(aps) != 1: falha("AuthorizationPolicy do Job")
+              if pv:
+                  np = next(d for d in docs if d["kind"] == "NetworkPolicy" and d["metadata"]["name"].endswith("-banco"))
+                  if not any(r["from"][0].get("podSelector", {}).get("matchExpressions") == [{"key": "app.kubernetes.io/component", "operator": "In", "values": ["fila", "migration"]}] for r in np["spec"]["ingress"]): falha("a migracao nao alcanca o banco efemero")
+          print("migracao ok")
+          FIMPY
+          recusa() { local m=$1; shift; local e; if e=$(helm template x charts/app "${base[@]}" "$@" 2>&1 >/dev/null); then echo "::error::aceitou: $*"; exit 1; fi; grep -qF -- "$m" <<<"$e" || { echo "::error::recusou por outro motivo: $e"; exit 1; }; }
+          recusa "exige database.enabled" "${mg[@]}" --set database.enabled=false
+          recusa "falta command ou args" --set migration.enabled=true --set migration.database.secret=s
+          recusa "migration.database.secret e obrigatorio" --set migration.enabled=true --set 'migration.args[0]=m'
+          recusa "escrita pelo proprio chart" "${mg[@]}" --set 'migration.env[0].name=PGUSER'
+          recusa "limits.memory" "${mg[@]}" --set migration.resources.requests.cpu=1m
+
   publicar:
     name: Publicar OCI
     needs: [versao, lint]

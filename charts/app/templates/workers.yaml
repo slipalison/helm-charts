@@ -57,6 +57,10 @@ metadata:
   labels:
     {{- include "app.labels" $ | nindent 4 }}
     app.kubernetes.io/component: {{ $nome }}
+  {{- with include "app.ondaDosWorkloads" $ }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
 spec:
   replicas: {{ if include "app.emPreview" $ }}1{{ else }}{{ $w.replicas | default 1 }}{{ end }}
   revisionHistoryLimit: 3

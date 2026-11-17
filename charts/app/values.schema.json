@@ -128,6 +128,28 @@
         }
       }
     },
+    "migration": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Job de migracao com gancho do Argo CD e credencial propria do banco.",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "command": { "type": "array", "items": { "type": "string" } },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "env": {
+          "type": "array",
+          "items": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" } } }
+        },
+        "resources": { "type": "object" },
+        "database": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "secret": { "type": "string", "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$" } }
+        },
+        "backoffLimit": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "activeDeadlineSeconds": { "type": "integer", "minimum": 60 }
+      }
+    },
     "preview": {
       "type": "object",
       "additionalProperties": false,
