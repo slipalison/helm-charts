@@ -234,23 +234,13 @@ jobs:
           isca "Rollout/pr-42-exemplo le o Secret 'exemplo-teste' (env CHAVE)" charts/app "${base[@]}" "${pv0[@]}" --set-json 'preview.secretsPermitidos=[]' --set 'env[0].valueFrom.secretKeyRef.name=exemplo-teste'
           # Volume: o chart nao deixa o values montar um Secret, entao a isca e
           # numa copia do chart, com um volume plantado no Rollout e no Job.
-          plantar() {
-            rm -rf "$T/sp-chart"; cp -r charts/app "$T/sp-chart"
-            python3 - "$T/sp-chart/templates/$1" "$2" <<'FIMPY'
-          import sys
-          vol = "      volumes:\n        - name: tmp\n          emptyDir: {}\n"
-          p, extra = sys.argv[1], sys.argv[2].replace("|", "\n") + "\n"
-          s = open(p).read()
-          if s.count(vol) != 1: raise SystemExit(f"FALHA: a isca nao achou os volumes de {p}")
-          open(p, "w").write(s.replace(vol, vol + extra))
-          FIMPY
-          }
-          plantar rollout.yaml "        - name: s|          secret:|            secretName: fora"
+          plantar() { rm -rf "$T/sp-chart"; cp -r charts/app "$T/sp-chart"; python3 .github/scripts/plantar.py "$T/sp-chart/templates/$1" "$2" "$3"; }
+          plantar rollout.yaml volume "        - name: s|          secret:|            secretName: fora"
           isca "Rollout/pr-42-exemplo le o Secret 'fora' (volume s)" "$T/sp-chart" "${base[@]}" "${pv[@]}" "${lista[@]}"
-          plantar migration.yaml "        - name: p|          projected:|            sources:|              - secret:|                  name: fora"
+          plantar migration.yaml volume "        - name: p|          projected:|            sources:|              - secret:|                  name: fora"
           isca "Job/pr-42-exemplo-migration le o Secret 'fora' (volume p)" "$T/sp-chart" "${base[@]}" "${pv[@]}" "${lista[@]}"
           # O volume permitido passa: a isca reprova pelo nome, e nao pelo volume.
-          plantar workers.yaml "        - name: s|          secret:|            secretName: exemplo-teste"
+          plantar workers.yaml volume "        - name: s|          secret:|            secretName: exemplo-teste"
           helm template pr-42-exemplo "$T/sp-chart" "${base[@]}" "${pv[@]}" "${lista[@]}" > /dev/null
           rm -rf "$T/sp-chart"
 
@@ -347,8 +337,8 @@ jobs:
           FIMPY
 
       - name: Job de migracao
-        # O esquema muda num Job com credencial propria, para o app rodar sem
-        # DDL. Producao: gancho PreSync. Preview: gancho Sync depois do banco
+        # O esquema muda num Job com credencial propria, que nenhum pod do app
+        # le, para o app rodar sem DDL. Producao: gancho PreSync. Preview: gancho Sync depois do banco
         # efemero, com o app uma onda depois. Desligado, nada muda.
         run: |
           set -euo pipefail
@@ -453,6 +443,19 @@ jobs:
           recusa "o mesmo Secret do app" "${mg[@]}" --set migration.database.secret=exemplo-db
           recusa "o mesmo Secret do app" "${mg[@]}" --set database.secret=exemplo-dono-db
           recusa "o mesmo Secret da migracao" "${mg[@]}" --set 'workers.fila.args[0]=w' --set workers.fila.database.secret=exemplo-dono-db
+          # Nem por outro caminho: o Secret da migracao em env, envFrom, env so do
+          # worker, anotacao do sidecar ou volume de um pod do app. Cada isca
+          # pela sua mensagem, com o pod e o caminho.
+          recusa "Rollout/exemplo le o Secret 'exemplo-dono-db' (env K), que e o da migracao" "${mg[@]}" --set 'env[1].name=K' --set 'env[1].valueFrom.secretKeyRef.name=exemplo-dono-db' --set 'env[1].valueFrom.secretKeyRef.key=k'
+          recusa "Rollout/exemplo le o Secret 'exemplo-dono-db' (envFrom), que e o da migracao" "${mg[@]}" --set 'envFrom[0].secretRef.name=exemplo-dono-db'
+          recusa "Deployment/exemplo-fila le o Secret 'exemplo-dono-db' (env K), que e o da migracao" "${mg[@]}" --set 'workers.fila.args[0]=w' --set 'workers.fila.env[0].name=K' --set 'workers.fila.env[0].valueFrom.secretKeyRef.name=exemplo-dono-db' --set 'workers.fila.env[0].valueFrom.secretKeyRef.key=k'
+          recusa "Deployment/exemplo-fila monta o Secret 'exemplo-dono-db' pela anotacao sidecar.istio.io/userVolume" "${mg[@]}" --set 'workers.fila.args[0]=w' --set-json 'workers.fila.podAnnotations={"sidecar.istio.io/userVolume":"[{\"name\":\"v\",\"secret\":{\"secretName\":\"exemplo-dono-db\"}}]"}'
+          helm template exemplo charts/app "${base[@]}" "${mg[@]}" --set-json 'podAnnotations={"sidecar.istio.io/userVolume":"[{\"name\":\"v\",\"secret\":{\"secretName\":\"exemplo-outro\"}}]"}' > /dev/null
+          rm -rf "$T/mg-chart"; cp -r charts/app "$T/mg-chart"
+          python3 .github/scripts/plantar.py "$T/mg-chart/templates/workers.yaml" volume "        - name: s|          secret:|            secretName: exemplo-dono-db"
+          e=$(helm template exemplo "$T/mg-chart" "${base[@]}" "${mg[@]}" --set 'workers.fila.args[0]=w' 2>&1 >/dev/null) && { echo "::error::aceitou o volume com o Secret da migracao"; exit 1; }
+          grep -qF "Deployment/exemplo-fila le o Secret 'exemplo-dono-db' (volume s), que e o da migracao" <<<"$e" || { echo "::error::recusou por outro motivo: $e"; exit 1; }
+          rm -rf "$T/mg-chart"
           recusa "exige database.enabled" "${mg[@]}" --set database.enabled=false
           recusa "falta command ou args" --set migration.enabled=true --set migration.database.secret=s
           recusa "migration.database.secret e obrigatorio" --set migration.enabled=true --set 'migration.args[0]=m'

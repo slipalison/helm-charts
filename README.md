@@ -344,8 +344,14 @@ migracao.
 **so dele** — a da role dona do esquema —, que nao chega a pod nenhum do app.
 
 O que o chart garante, e so isto: o Job, o app e cada worker leem Secrets de
-**nomes diferentes**, e o render recusa o mesmo Secret no Job e no app (ou num
-worker). O que o chart **nao** garante: que o app fique sem DDL. Sem
+**nomes diferentes**. O render recusa o Secret de `migration.database.secret`
+em qualquer pod do app (o Rollout e os workers): como a credencial do banco
+(`database.secret`, o `<app>-db` padrao, `workers.<chave>.database.secret`), por
+`env` (`secretKeyRef`), por `envFrom` (que os workers herdam), pelo `env`
+proprio de um worker, por volume ou pela anotacao `sidecar.istio.io/userVolume`.
+A recusa le os pods como saem do render, e diz o pod e o caminho. No preview
+ela nao roda: ali a migracao e o app usam o `banco-app`, o do banco efemero.
+O que o chart **nao** garante: que o app fique sem DDL. Sem
 `database.secret`, o app le o `<app>-db`, que e a senha da role `<app>` — a
 dona do banco que o proprio chart declara. O app so fica sem DDL quando
 `database.secret` aponta para a credencial de uma role sem DDL, e essa role e
@@ -408,7 +414,9 @@ Tres ressalvas, ditas de proposito:
 Recusa no render: `migration` sem `database.enabled`, sem `command` nem `args`
 (rodaria o app, que nao termina), sem `migration.database.secret` em producao,
 com o mesmo Secret do app (`database.secret`, ou `<app>-db` sem ele) ou de um
-worker, com recursos incompletos ou com `env` que nomeia variavel do chart.
+worker, com o Secret da migracao lido por qualquer pod do app (`env`,
+`envFrom`, volume ou `sidecar.istio.io/userVolume`), com recursos incompletos
+ou com `env` que nomeia variavel do chart.
 
 ### O que o chart NAO deixa voce fazer
 

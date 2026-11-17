@@ -1,9 +1,10 @@
 {{- /*
 JOB DE MIGRACAO: o esquema do banco muda aqui, com uma credencial que e SO
-DELE: a de `migration.database.secret` nao chega a pod nenhum do app, e o chart
-recusa o mesmo Secret no Job e no app (ou num worker). Para o app rodar com uma
-role SEM DDL, a credencial dele (`database.secret`) tem de ser de uma role sem
-DDL; o chart nao cria essa role nem confere o que ela pode.
+DELE: o render recusa o Secret de `migration.database.secret` em qualquer pod
+do app (o Rollout e os workers), seja como a credencial do banco, seja por
+`env`, `envFrom`, volume ou `sidecar.istio.io/userVolume`. Para o app rodar
+com uma role SEM DDL, a credencial dele (`database.secret`) tem de ser de uma
+role sem DDL; o chart nao cria essa role nem confere o que ela pode.
 
   - Producao: gancho PreSync do Argo CD. O Argo roda o Job e espera ele
     terminar antes de aplicar qualquer outro objeto; se a migracao falha, o
@@ -53,6 +54,24 @@ autentica, e isso fica fora do chart.
 {{- range $nome, $w := .Values.workers }}
 {{- if and $w $w.database (eq ($w.database.secret | default "") $segredo) }}
 {{- fail (printf "workers.%s.database.secret e '%s', o mesmo Secret da migracao. O worker precisa de outra credencial." $nome $segredo) }}
+{{- end }}
+{{- end }}
+{{- /*
+Nem por outro caminho: um `env` com `secretKeyRef`, um `envFrom` (que os
+workers herdam), o `env` proprio de um worker, um volume ou a anotacao
+`sidecar.istio.io/userVolume`. Le os pods como saem do render (o helper
+`app.secretsDosPods`), e nao o values. No preview isto nao roda: a credencial
+da migracao e a do banco efemero, a mesma do app.
+*/}}
+{{- $lidos := include "app.secretsDosPods" (dict "ctx" . "arquivos" (list "rollout.yaml" "workers.yaml")) | fromYaml }}
+{{- range $r := $lidos.refs }}
+{{- if eq $r.secret $segredo }}
+{{- fail (printf "%s le o Secret '%s' (%s), que e o da migracao. A credencial da migracao nao vai para o app nem para os workers." $r.onde $r.secret $r.caminho) }}
+{{- end }}
+{{- end }}
+{{- range $u := $lidos.userVolume }}
+{{- if contains (printf "%q" $segredo) $u.valor }}
+{{- fail (printf "%s monta o Secret '%s' pela anotacao sidecar.istio.io/userVolume, e ele e o da migracao. A credencial da migracao nao vai para o app nem para os workers." $u.onde $segredo) }}
 {{- end }}
 {{- end }}
 {{- end }}
