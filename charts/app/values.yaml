@@ -238,8 +238,11 @@ preview:
 #           value: fila
 #       database:
 #         secret: meu-app-fila-db # credencial propria; padrao a do app
-#       probes: {}                # sobrepoe `probes` campo a campo
+#       probes: {}                # sobrepoe `probes` campo a campo; as duas
+#                                 # sondas HTTP sao obrigatorias
 #       podAnnotations: {}        # sobrepoe `podAnnotations`
+#       terminationGracePeriodSeconds: 60   # prazo depois do SIGTERM; padrao 30
+#       strategy: {type: Recreate}          # padrao RollingUpdate
 workers: {}
 
 # JOB DE MIGRACAO — o esquema do banco muda aqui, com uma credencial so dele.

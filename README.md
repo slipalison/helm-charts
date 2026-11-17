@@ -301,7 +301,16 @@ workers:
         value: fila
     database:
       secret: meu-app-fila-db   # credencial propria; padrao a do app
+    terminationGracePeriodSeconds: 60   # prazo depois do SIGTERM; padrao 30
+    strategy: {type: Recreate}          # padrao RollingUpdate
 ```
+
+O worker precisa servir `/readyz` (ou o `path` das sondas) na porta
+operacional e terminar o que esta fazendo em ate
+`terminationGracePeriodSeconds` (30 s sem o campo) depois do SIGTERM. Com o
+`RollingUpdate` padrao, o worker velho e o novo rodam juntos durante o deploy;
+quando dois consumidores da mesma fila nao podem coexistir, use
+`strategy: {type: Recreate}`.
 
 | O worker herda do app | Por que |
 |---|---|
@@ -320,11 +329,13 @@ porta declarada no container e so a das sondas e das metricas.
 No preview, a credencial do banco e sempre a do banco efemero (`banco-app`), e
 a NetworkPolicy `-banco` deixa os workers entrarem pela 5432.
 
-Recusa no render: worker sem `command` nem `args` (rodaria o app de novo),
-recursos sem `requests.cpu`, `requests.memory` e `limits.memory` (o Kyverno
-recusaria o pod, com o apply verde), um `env` que nomeia variavel do chart
-(`DATABASE_URL` inclusive: a credencial muda por `database.secret`, que no
-preview da lugar ao banco efemero) e o nome `migration`, que e do Job de
+Recusa no render: worker sem `command` nem `args` (rodaria o app de novo), sem
+uma das duas sondas (`probes.readiness` ou `probes.liveness` sem `path`), com
+`strategy` de `type: Recreate` e `rollingUpdate`, com recursos sem
+`requests.cpu`, `requests.memory` e `limits.memory` (o Kyverno recusaria o pod,
+com o apply verde), com um `env` que nomeia variavel do chart (`DATABASE_URL`
+inclusive: a credencial muda por `workers.<chave>.database.secret`, que no
+preview da lugar ao banco efemero), e o nome `migration`, que e do Job de
 migracao.
 
 ### Job de migracao: o esquema muda com credencial propria

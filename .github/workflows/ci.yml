@@ -320,6 +320,21 @@ jobs:
           recusa "escrita pelo proprio chart" --set 'workers.fila.args[0]=w' --set 'workers.fila.env[0].name=DATABASE_URL' --set 'workers.fila.env[0].value=x'
           recusa "invalid propertyName 'migration'" --set 'workers.migration.args[0]=w'
           recusa "invalid propertyName 'Fila'" --set 'workers.Fila.args[0]=w'
+          recusa "workers.fila.probes.readiness: falta a sonda" "${wk[@]}" --set workers.fila.probes.readiness=null
+          recusa "workers.fila.probes.liveness: falta a sonda" "${wk[@]}" --set workers.fila.probes.liveness.path=
+          recusa "rollingUpdate so vale com type RollingUpdate" "${wk[@]}" --set workers.fila.strategy.type=Recreate --set workers.fila.strategy.rollingUpdate.maxSurge=1
+          recusa "at '/workers/fila/strategy/type'" "${wk[@]}" --set workers.fila.strategy.type=Outro
+          # Desligamento e estrategia: so aparecem quando declarados.
+          if grep -qE '^  strategy:$|terminationGracePeriodSeconds' <(sed -n '/^kind: Deployment$/,/^---$/p' "$T/wk.yaml"); then echo "::error::strategy ou prazo sem o campo"; exit 1; fi
+          helm template exemplo charts/app "${base[@]}" "${wk[@]}" --set workers.fila.strategy.type=Recreate --set workers.fila.terminationGracePeriodSeconds=90 > "$T/wk-rec.yaml"
+          python3 - <<'FIMPY'
+          import os, yaml
+          docs = [d for d in yaml.safe_load_all(open(os.environ["T"] + "/wk-rec.yaml")) if d]
+          dep = next(d for d in docs if d["kind"] == "Deployment")
+          if dep["spec"].get("strategy") != {"type": "Recreate"}: raise SystemExit("FALHA: strategy do worker")
+          if dep["spec"]["template"]["spec"].get("terminationGracePeriodSeconds") != 90: raise SystemExit("FALHA: prazo do worker")
+          print("desligamento do worker ok")
+          FIMPY
 
       - name: Job de migracao
         # O esquema muda num Job com credencial propria, para o app rodar sem

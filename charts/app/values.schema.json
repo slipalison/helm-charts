@@ -129,7 +129,23 @@
             "properties": { "secret": { "type": "string", "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$" } }
           },
           "probes": { "type": "object" },
-          "podAnnotations": { "type": "object" }
+          "podAnnotations": { "type": "object" },
+          "terminationGracePeriodSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3600,
+            "description": "Prazo, depois do SIGTERM, para o worker terminar o que esta fazendo. Ausente = 30 s, o padrao do Kubernetes."
+          },
+          "strategy": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type"],
+            "properties": {
+              "type": { "enum": ["Recreate", "RollingUpdate"] },
+              "rollingUpdate": { "type": "object" }
+            },
+            "description": "Estrategia do Deployment. Ausente = RollingUpdate padrao (maxSurge 25%), em que o worker velho e o novo rodam juntos por um tempo."
+          }
         }
       }
     },

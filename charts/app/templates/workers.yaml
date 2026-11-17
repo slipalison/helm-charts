@@ -42,6 +42,17 @@ proprio sidecar (sondas e metricas).
 {{- include "app.exigeRecursos" (dict "onde" (printf "workers.%s" $nome) "recursos" $recursos) }}
 {{- $porta := $w.port | default (include "app.probePort" $ | int) }}
 {{- $sondas := mergeOverwrite (deepCopy $.Values.probes) ($w.probes | default dict) }}
+{{- range $tipo := list "readiness" "liveness" }}
+{{- $s := get $sondas $tipo }}
+{{- if not (and (kindIs "map" $s) $s.path) }}
+{{- fail (printf "workers.%s.probes.%s: falta a sonda (path). O worker precisa servir a sonda HTTP na porta operacional (%v): sem ela o Deployment nao sabe quando o worker ficou pronto nem quando travou." $nome $tipo $porta) }}
+{{- end }}
+{{- end }}
+{{- with $w.strategy }}
+{{- if and (eq (.type | default "") "Recreate") .rollingUpdate }}
+{{- fail (printf "workers.%s.strategy: rollingUpdate so vale com type RollingUpdate." $nome) }}
+{{- end }}
+{{- end }}
 {{- $anotacoes := mergeOverwrite (deepCopy ($.Values.podAnnotations | default dict)) ($w.podAnnotations | default dict) }}
 {{- $segredo := include "app.dbSecretDoApp" $ }}
 {{- if and $w.database $w.database.secret (not (include "app.bancoPreview" $)) }}
@@ -64,6 +75,12 @@ metadata:
 spec:
   replicas: {{ if include "app.emPreview" $ }}1{{ else }}{{ $w.replicas | default 1 }}{{ end }}
   revisionHistoryLimit: 3
+  {{- with $w.strategy }}
+  # A do worker. Com `Recreate`, o antigo cai antes de o novo subir: dois
+  # consumidores da mesma fila nunca rodam juntos durante o deploy.
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       app: {{ $wnome }}
@@ -79,6 +96,11 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ $app }}
+      {{- with $w.terminationGracePeriodSeconds }}
+      # Quanto o worker tem, depois do SIGTERM, para terminar o que esta
+      # fazendo antes do SIGKILL. O padrao do Kubernetes e 30 s.
+      terminationGracePeriodSeconds: {{ . }}
+      {{- end }}
       {{- with $.Values.image.pullSecret }}
       imagePullSecrets:
         - name: {{ . }}
