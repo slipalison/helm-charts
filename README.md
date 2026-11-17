@@ -202,9 +202,9 @@ da NetworkPolicy padrao — a deles e a `-banco`, espelho da de `databases`.
 um Secret (uma chave de API, uma credencial de servico), o preview tinha duas
 saidas, e as duas sao ruins: receber uma **copia do Secret de producao** (o
 Kyverno copia para `pr-*` o Secret marcado com
-`preview.alisonamorim.com/copiar: "true"`) — e o codigo de um PR passa a ler a
-credencial real — ou ficar sem a variavel, e o que depende dela nao se valida
-no preview.
+`preview.alisonamorim.com/copiar: "true"`), o que poe uma credencial de
+producao ao alcance de codigo ainda nao revisado — ou ficar sem a variavel, e o
+que depende dela nao se valida no preview.
 
 `preview.secretEnv` e a terceira: um mapa `nome: {secret, key}` que, **so no
 preview**, troca a variavel de mesmo nome por um `secretKeyRef` para um Secret
@@ -248,6 +248,32 @@ O Kyverno o copia para cada `pr-*` quando o namespace nasce. O Secret de
 producao continua **sem** o rotulo, e por isso nunca chega ao preview. A copia
 e tirada uma vez (`synchronize: false`): trocar a credencial de teste vale para
 os previews novos; um aberto precisa renascer.
+
+#### O que o `secretEnv` nao cobre: `preview.secretsPermitidos`
+
+O `secretEnv` troca so as variaveis que ele nomeia. Uma referencia que ele nao
+cobre fica no preview com o nome do Secret de producao: uma variavel que so um
+worker tem, o `migration.env`, o `envFrom` (que os workers herdam), um `env`
+esquecido. Ligada por opcao, a lista fecha essa porta:
+
+```yaml
+# apps/<app>/preview.yaml do homelab-gitops
+preview:
+  secretsPermitidos: [meu-app-preview]   # presente, mesmo vazia, liga a conferencia
+```
+
+Com a lista presente, o render do **preview** falha se um pod do app — o
+Rollout, um worker ou o Job de migracao — ler um Secret fora de `banco-app`, dos
+`secret` do `secretEnv` e da lista, por `env` (`secretKeyRef`), `envFrom`
+(`secretRef`) ou volume (`secret` e `projected`), em qualquer container ou
+initContainer. A mensagem diz o pod, o Secret e por onde. A conferencia le o
+pod como ele sai do render, e nao o values. Nao olha `imagePullSecrets` (quem
+le o pull secret e o kubelet, e nao o app), nem os pods do banco efemero. Sem a
+lista, ou em producao, o render nao muda uma linha.
+
+A lista diz quais Secrets o preview pode ler, e nao de onde eles vem: um nome
+listado ainda pode ser a copia de um Secret de producao, se ele tiver o rotulo
+de copia. Por isso ela so deve trazer Secrets **so de teste**.
 
 O desenho inteiro, com o que o app precisa ter para entrar, esta em
 `distros-setup/proxmox/PLANO-PREVIEW.md`.

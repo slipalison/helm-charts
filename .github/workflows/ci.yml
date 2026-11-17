@@ -189,6 +189,63 @@ jobs:
           recusa "missing property 'key'" --set preview.secretEnv.CHAVE.secret=exemplo-preview
           recusa "additional properties 'outra'" --set preview.secretEnv.CHAVE.secret=s --set preview.secretEnv.CHAVE.key=k --set preview.secretEnv.CHAVE.outra=1
 
+      - name: preview.secretsPermitidos
+        # A lista fecha o que o secretEnv nao cobre: com ela, o render do
+        # preview falha se um pod do app (API, worker, Job) ler um Secret fora
+        # de banco-app, dos secret do secretEnv e da lista, pelo env, pelo
+        # envFrom ou por um volume. Sem ela, ou em producao, nada muda.
+        run: |
+          set -euo pipefail
+          # Um diretorio por run, e nao um caminho fixo: o validar-local roda
+          # estes passos no host, onde o /tmp sobrevive entre rodadas.
+          export T="${RUNNER_TEMP:-$(mktemp -d)}"
+          base=(--set name=exemplo --set owner=equipe
+                --set image.repository=ghcr.io/slipalison/exemplo
+                --set image.tag=sha-abc1234 --set database.enabled=true
+                --set 'env[0].name=CHAVE' --set 'env[0].valueFrom.secretKeyRef.name=exemplo-producao'
+                --set 'env[0].valueFrom.secretKeyRef.key=CHAVE'
+                --set 'workers.fila.args[0]=w' --set migration.enabled=true
+                --set 'migration.args[0]=m' --set migration.database.secret=exemplo-dono-db)
+          # O preview de base cobre CHAVE pelo secretEnv; `pv0` e o mesmo sem a cobertura.
+          pv0=(--set preview.numero=42 --set preview.tag=pr-42-abcdef0)
+          pv=("${pv0[@]}" --set preview.secretEnv.CHAVE.secret=exemplo-preview --set preview.secretEnv.CHAVE.key=CHAVE)
+          lista=(--set-json 'preview.secretsPermitidos=["exemplo-teste"]')
+          # O que passa sai igual ao render sem a lista, e producao ignora a lista.
+          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" > "$T/sp-sem.yaml"
+          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" "${lista[@]}" > "$T/sp-com.yaml"
+          diff "$T/sp-sem.yaml" "$T/sp-com.yaml"
+          helm template exemplo charts/app "${base[@]}" > "$T/sp-prod.yaml"
+          helm template exemplo charts/app "${base[@]}" "${lista[@]}" --set 'envFrom[0].secretRef.name=fora' > /dev/null
+          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" "${lista[@]}" --set 'envFrom[0].secretRef.name=exemplo-teste' > /dev/null
+          # Cada isca: um pod que le um Secret fora da lista, por um caminho.
+          isca() { local m=$1; shift; local e; if e=$(helm template pr-42-exemplo "$@" 2>&1 >/dev/null); then echo "::error::a lista deixou passar: $m"; exit 1; fi; grep -qF -- "$m" <<<"$e" || { echo "::error::recusou por outro motivo: $e"; exit 1; }; echo "isca reprovada: $m"; }
+          isca "Rollout/pr-42-exemplo le o Secret 'fora' (envFrom)" charts/app "${base[@]}" "${pv[@]}" "${lista[@]}" --set 'envFrom[0].secretRef.name=fora'
+          isca "Rollout/pr-42-exemplo le o Secret 'exemplo-producao' (env CHAVE)" charts/app "${base[@]}" "${pv0[@]}" "${lista[@]}"
+          isca "Deployment/pr-42-exemplo-fila le o Secret 'fora' (env SO)" charts/app "${base[@]}" "${pv[@]}" "${lista[@]}" --set 'workers.fila.env[0].name=SO' --set 'workers.fila.env[0].valueFrom.secretKeyRef.name=fora' --set 'workers.fila.env[0].valueFrom.secretKeyRef.key=k'
+          isca "Job/pr-42-exemplo-migration le o Secret 'fora' (env M)" charts/app "${base[@]}" "${pv[@]}" "${lista[@]}" --set 'migration.env[0].name=M' --set 'migration.env[0].valueFrom.secretKeyRef.name=fora' --set 'migration.env[0].valueFrom.secretKeyRef.key=k'
+          isca "Rollout/pr-42-exemplo le o Secret 'exemplo-teste' (env CHAVE)" charts/app "${base[@]}" "${pv0[@]}" --set-json 'preview.secretsPermitidos=[]' --set 'env[0].valueFrom.secretKeyRef.name=exemplo-teste'
+          # Volume: o chart nao deixa o values montar um Secret, entao a isca e
+          # numa copia do chart, com um volume plantado no Rollout e no Job.
+          plantar() {
+            rm -rf "$T/sp-chart"; cp -r charts/app "$T/sp-chart"
+            python3 - "$T/sp-chart/templates/$1" "$2" <<'FIMPY'
+          import sys
+          vol = "      volumes:\n        - name: tmp\n          emptyDir: {}\n"
+          p, extra = sys.argv[1], sys.argv[2].replace("|", "\n") + "\n"
+          s = open(p).read()
+          if s.count(vol) != 1: raise SystemExit(f"FALHA: a isca nao achou os volumes de {p}")
+          open(p, "w").write(s.replace(vol, vol + extra))
+          FIMPY
+          }
+          plantar rollout.yaml "        - name: s|          secret:|            secretName: fora"
+          isca "Rollout/pr-42-exemplo le o Secret 'fora' (volume s)" "$T/sp-chart" "${base[@]}" "${pv[@]}" "${lista[@]}"
+          plantar migration.yaml "        - name: p|          projected:|            sources:|              - secret:|                  name: fora"
+          isca "Job/pr-42-exemplo-migration le o Secret 'fora' (volume p)" "$T/sp-chart" "${base[@]}" "${pv[@]}" "${lista[@]}"
+          # O volume permitido passa: a isca reprova pelo nome, e nao pelo volume.
+          plantar workers.yaml "        - name: s|          secret:|            secretName: exemplo-teste"
+          helm template pr-42-exemplo "$T/sp-chart" "${base[@]}" "${pv[@]}" "${lista[@]}" > /dev/null
+          rm -rf "$T/sp-chart"
+
       - name: workers
         # Deployments extras com a mesma imagem. Sem `workers` nada muda; com
         # ele, o worker tem a imagem, o env e os cuidados do app, e nenhuma

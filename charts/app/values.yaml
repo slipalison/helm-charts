@@ -167,7 +167,8 @@ owner: alison
 #   - uma replica, sem canary, sem HPA, sem PDB;
 #   - com `database.enabled`, um Postgres efemero DENTRO do namespace, e nunca o
 #     banco de producao — que fica ate fora de alcance de rede;
-#   - `preview.env` e `preview.secretEnv` sobrepoem o `env` pelo nome.
+#   - `preview.env` e `preview.secretEnv` sobrepoem o `env` pelo nome;
+#   - com `preview.secretsPermitidos`, nenhum pod le Secret fora da lista.
 # Desenho completo: distros-setup/proxmox/PLANO-PREVIEW.md.
 preview:
   numero: ""
@@ -194,6 +195,12 @@ preview:
   #       key: CHAVE_DA_API
   #       optional: false     # opcional; o padrao do Kubernetes e false
   secretEnv: {}
+  # LISTA DE SECRETS PERMITIDOS NO PREVIEW, ligada por opcao. Presente (mesmo
+  # vazia), o render do preview falha se um pod do app (Rollout, worker, Job)
+  # ler, por env, envFrom ou volume, um Secret fora de `banco-app`, dos
+  # `secret` do `secretEnv` e desta lista. E o que fecha o que o `secretEnv`
+  # nao cobre. Comentado de proposito: a ausencia desliga a conferencia.
+  # secretsPermitidos: [meu-app-preview]
   banco:
     # A mesma imagem do cluster de producao (homelab-gitops,
     # platform/postgres/manifests/cluster.yaml). Mudou la, muda aqui.

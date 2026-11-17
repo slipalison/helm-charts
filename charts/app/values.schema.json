@@ -190,6 +190,11 @@
           },
           "description": "Mapa nome: {secret, key} que sobrepoe o env pelo nome com um secretKeyRef, so no preview. Para o preview ler credenciais proprias, de teste, em vez de uma copia do Secret de producao."
         },
+        "secretsPermitidos": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$", "maxLength": 253 },
+          "description": "Ligado por opcao: presente (mesmo vazia), o render do preview falha se um pod do app ler um Secret fora de banco-app, dos secret de secretEnv e desta lista."
+        },
         "banco": {
           "type": "object",
           "additionalProperties": false,
