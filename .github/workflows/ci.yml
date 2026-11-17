@@ -147,6 +147,9 @@ jobs:
         # uma linha.
         run: |
           set -euo pipefail
+          # Um diretorio por run, e nao um caminho fixo: o validar-local roda
+          # estes passos no host, onde o /tmp sobrevive entre rodadas.
+          export T="${RUNNER_TEMP:-$(mktemp -d)}"
           base=(--set name=exemplo --set owner=equipe
                 --set image.repository=ghcr.io/slipalison/exemplo
                 --set image.tag=sha-abc1234 --set versao=1.2.3
@@ -158,16 +161,17 @@ jobs:
                --set preview.secretEnv.NOVA.secret=exemplo-preview --set preview.secretEnv.NOVA.key=NOVA
                --set preview.secretEnv.NOVA.optional=true)
           pv=(--set preview.numero=42 --set preview.tag=pr-42-abcdef0)
-          helm template exemplo charts/app "${base[@]}" > /tmp/seg-prod.yaml
-          helm template exemplo charts/app "${base[@]}" "${seg[@]}" > /tmp/seg-prod-com.yaml
-          diff /tmp/seg-prod.yaml /tmp/seg-prod-com.yaml
-          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" > /tmp/seg-pv-sem.yaml
-          grep -q 'name: exemplo-producao' /tmp/seg-pv-sem.yaml
-          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" "${seg[@]}" > /tmp/seg-pv.yaml
-          if grep -n 'exemplo-producao' /tmp/seg-pv.yaml; then echo "::error::o Secret de producao ficou no preview"; exit 1; fi
+          helm template exemplo charts/app "${base[@]}" > "$T/seg-prod.yaml"
+          helm template exemplo charts/app "${base[@]}" "${seg[@]}" > "$T/seg-prod-com.yaml"
+          diff "$T/seg-prod.yaml" "$T/seg-prod-com.yaml"
+          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" > "$T/seg-pv-sem.yaml"
+          grep -q 'name: exemplo-producao' "$T/seg-pv-sem.yaml"
+          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" "${seg[@]}" > "$T/seg-pv.yaml"
+          if grep -n 'exemplo-producao' "$T/seg-pv.yaml"; then echo "::error::o Secret de producao ficou no preview"; exit 1; fi
           python3 - <<'FIMPY'
-          import yaml
-          docs = [d for d in yaml.safe_load_all(open("/tmp/seg-pv.yaml")) if d]
+          import os, yaml
+          T = os.environ["T"]
+          docs = [d for d in yaml.safe_load_all(open(f"{T}/seg-pv.yaml")) if d]
           ro = next(d for d in docs if d["kind"] == "Rollout")
           env = {e["name"]: e for e in ro["spec"]["template"]["spec"]["containers"][0]["env"]}
           def falha(m): raise SystemExit("FALHA: " + m)
@@ -191,6 +195,9 @@ jobs:
         # porta de entrada.
         run: |
           set -euo pipefail
+          # Um diretorio por run, e nao um caminho fixo: o validar-local roda
+          # estes passos no host, onde o /tmp sobrevive entre rodadas.
+          export T="${RUNNER_TEMP:-$(mktemp -d)}"
           base=(--set name=exemplo --set owner=equipe
                 --set image.repository=ghcr.io/slipalison/exemplo
                 --set image.tag=sha-abc1234 --set versao=1.2.3
@@ -202,17 +209,18 @@ jobs:
               --set workers.fila.resources.requests.cpu=10m --set workers.fila.resources.requests.memory=32Mi
               --set workers.fila.resources.limits.memory=64Mi)
           pv=(--set preview.numero=42 --set preview.tag=pr-42-abcdef0)
-          helm template exemplo charts/app "${base[@]}" > /tmp/wk-sem.yaml
-          helm template exemplo charts/app "${base[@]}" --set-json 'workers={}' > /tmp/wk-vazio.yaml
-          diff /tmp/wk-sem.yaml /tmp/wk-vazio.yaml
-          if grep -q '^kind: Deployment$' /tmp/wk-sem.yaml; then echo "::error::Deployment sem workers"; exit 1; fi
-          helm template exemplo charts/app "${base[@]}" "${wk[@]}" > /tmp/wk.yaml
-          helm template pr-42-exemplo charts/app "${base[@]}" "${wk[@]}" "${pv[@]}" --set preview.env.A=preview > /tmp/wk-pv.yaml
+          helm template exemplo charts/app "${base[@]}" > "$T/wk-sem.yaml"
+          helm template exemplo charts/app "${base[@]}" --set-json 'workers={}' > "$T/wk-vazio.yaml"
+          diff "$T/wk-sem.yaml" "$T/wk-vazio.yaml"
+          if grep -q '^kind: Deployment$' "$T/wk-sem.yaml"; then echo "::error::Deployment sem workers"; exit 1; fi
+          helm template exemplo charts/app "${base[@]}" "${wk[@]}" > "$T/wk.yaml"
+          helm template pr-42-exemplo charts/app "${base[@]}" "${wk[@]}" "${pv[@]}" --set preview.env.A=preview > "$T/wk-pv.yaml"
           python3 - <<'FIMPY'
-          import yaml
+          import os, yaml
+          T = os.environ["T"]
           def falha(m): raise SystemExit("FALHA: " + m)
           def carrega(p): return [d for d in yaml.safe_load_all(open(p)) if d]
-          for arq, pv in (("/tmp/wk.yaml", False), ("/tmp/wk-pv.yaml", True)):
+          for arq, pv in ((f"{T}/wk.yaml", False), (f"{T}/wk-pv.yaml", True)):
               docs = carrega(arq)
               app = "pr-42-exemplo" if pv else "exemplo"
               deps = [d for d in docs if d["kind"] == "Deployment"]
