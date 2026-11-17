@@ -272,9 +272,12 @@ migration:
     # app (`database.secret`) e o de cada worker. No preview e
     # ignorado (a credencial e a do banco efemero).
     secret: ""
-  # 0: uma migracao que falha nao e repetida pelo Job. Quem tenta de novo e o
-  # retry do sync do Argo CD, que recria o Job.
+  # 0: em producao, uma migracao que falha nao e repetida pelo Job. Quem tenta
+  # de novo e o retry do sync do Argo CD, que recria o Job. No preview e no
+  # minimo 3, com espera crescente entre as tentativas: o banco efemero acabou
+  # de nascer e pode levar alguns segundos para aceitar conexao.
   backoffLimit: 0
+  # Teto do Job, de 60 a 3600 s. Um PreSync preso segura o sync inteiro.
   activeDeadlineSeconds: 600
 
 podAnnotations: {}

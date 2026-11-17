@@ -408,6 +408,12 @@ jobs:
           if role["spec"]["passwordSecret"]["name"] != "exemplo-db": falha("o DatabaseRole continua no <app>-db")
           print("database.secret ok")
           FIMPY
+          # Tentativas: producao para na primeira falha; o preview tenta no
+          # minimo 3 vezes, porque o banco efemero acabou de nascer.
+          [ "$(grep -E '^  backoffLimit:' "$T/mg.yaml")" = "  backoffLimit: 0" ]
+          [ "$(grep -E '^  backoffLimit:' "$T/mg-pv.yaml")" = "  backoffLimit: 3" ]
+          helm template pr-42-exemplo charts/app "${base[@]}" "${mg[@]}" "${pv[@]}" --set migration.backoffLimit=5 > "$T/mg-pv-5.yaml"
+          [ "$(grep -E '^  backoffLimit:' "$T/mg-pv-5.yaml")" = "  backoffLimit: 5" ]
           recusa() { local m=$1; shift; local e; if e=$(helm template x charts/app "${base[@]}" "$@" 2>&1 >/dev/null); then echo "::error::aceitou: $*"; exit 1; fi; grep -qF -- "$m" <<<"$e" || { echo "::error::recusou por outro motivo: $e"; exit 1; }; }
           # O mesmo Secret no app e na migracao, pelos tres caminhos.
           recusa "o mesmo Secret do app" "${mg[@]}" --set migration.database.secret=exemplo-db
@@ -418,6 +424,7 @@ jobs:
           recusa "migration.database.secret e obrigatorio" --set migration.enabled=true --set 'migration.args[0]=m'
           recusa "escrita pelo proprio chart" "${mg[@]}" --set 'migration.env[0].name=PGUSER'
           recusa "limits.memory" "${mg[@]}" --set migration.resources.requests.cpu=1m
+          recusa "at '/migration/activeDeadlineSeconds'" "${mg[@]}" --set migration.activeDeadlineSeconds=3601
 
       - name: Politicas do Kyverno nos pods
         # O cluster recusa, em Enforce, o POD sem requests/limits, com

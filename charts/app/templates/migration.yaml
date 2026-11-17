@@ -76,7 +76,18 @@ metadata:
     {{- end }}
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
-  backoffLimit: {{ $m.backoffLimit | default 0 }}
+  {{- /*
+  Producao: `migration.backoffLimit` (0 por padrao). A migracao que falha para
+  o sync, e quem tenta de novo e o retry do Argo CD.
+  Preview: no minimo 3. O Argo CD so passa da onda -1 com o Cluster do CNPG
+  saudavel (o health dele vem embutido no Argo CD), mas o Service `banco-rw`
+  pode levar alguns segundos a mais para aceitar conexao, e um Job que falha de
+  primeira derrubaria o sync. Cada tentativa e um pod novo, com espera
+  crescente do proprio Kubernetes (10 s, 20 s, 40 s), dentro do
+  activeDeadlineSeconds. Repetir e seguro ali: o banco e efemero, e a migracao
+  ja precisa ser idempotente, porque roda a cada sync.
+  */}}
+  backoffLimit: {{ if $preview }}{{ max 3 ($m.backoffLimit | default 0 | int) }}{{ else }}{{ $m.backoffLimit | default 0 }}{{ end }}
   activeDeadlineSeconds: {{ $m.activeDeadlineSeconds | default 600 }}
   template:
     metadata:

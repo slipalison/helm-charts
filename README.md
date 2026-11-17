@@ -352,8 +352,8 @@ migration:
     secret: meu-app-dono-db   # obrigatorio em producao; ignorado no preview
   resources: {}           # vazio = os do app
   env: []                 # por cima do que o chart escreve, pelo nome
-  backoffLimit: 0         # quem tenta de novo e o retry do sync
-  activeDeadlineSeconds: 600
+  backoffLimit: 0         # producao: quem tenta de novo e o retry do sync; preview: no minimo 3
+  activeDeadlineSeconds: 600   # de 60 a 3600
 ```
 
 O Secret de `migration.database.secret` (e o de `database.secret`) fica no
@@ -367,6 +367,7 @@ do banco.
 | Gancho do Argo CD | `PreSync`: roda e termina antes de qualquer outro objeto do sync; se falha, o sync para e a imagem nova nao sobe | `Sync`, onda 1; o Rollout e os workers vao para a onda 2 |
 | Por que diferente | — | O namespace (onda -2) e o banco efemero (onda -1) nascem no mesmo sync, e um `PreSync` rodaria antes de os dois existirem |
 | Credencial | `migration.database.secret` | `banco-app`, a do banco efemero |
+| Tentativas | `backoffLimit` (0): a falha para o sync | no minimo 3, com espera crescente (10 s, 20 s, 40 s): o banco efemero pode levar alguns segundos a mais que o `Cluster` para aceitar conexao |
 | Job anterior | `BeforeHookCreation`: apagado quando o proximo nasce; o ultimo fica, com o log | igual |
 
 O Job recebe a versao, a fiacao do OpenTelemetry, o endereco do banco, a
@@ -378,8 +379,11 @@ pe e o Job so acabaria no `activeDeadlineSeconds`, como falha. Uma
 AuthorizationPolicy `<name>-migration-sem-entrada` fecha a entrada, e no
 preview a NetworkPolicy `-banco` deixa o Job entrar pela 5432.
 
-Duas ressalvas, ditas de proposito:
+Tres ressalvas, ditas de proposito:
 
+- **A migracao precisa ser idempotente: roda a cada sync.** O gancho roda em
+  todo sync do Argo CD, inclusive nos do `selfHeal`, e nao so quando a imagem
+  muda. Rodar de novo sobre um esquema ja migrado tem de ser um nada.
 - **No primeiro sync de um app novo, o `PreSync` nao tem onde rodar**: o
   namespace e do chart e so nasce na fase Sync, e o sync para no gancho antes
   de chegar la — o retry repete a mesma falha. Ligue `migration` num app que
