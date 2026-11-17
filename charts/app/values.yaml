@@ -114,6 +114,12 @@ database:
   # consome o cluster inteiro e derruba os outros, inclusive o proprio
   # operador. Este numero e o que impede isso.
   connectionLimit: 20
+  # Secret que o APP le em producao (o Rollout, e os workers que nao trocam o
+  # seu). Vazio = `<app>-db`, a senha da role `<app>`, que e DONA do banco. E o
+  # campo para o app que roda com o Job de migracao: o Job fica com a role
+  # dona, e o app passa a uma role sem DDL, criada fora do chart. Mesmo
+  # formato do `<app>-db`. Ignorado no preview (la e o banco efemero).
+  secret: ""
 
 # LIGAR O BANCO NUM APP: nao basta `enabled: true`. A senha precisa existir
 # selada em DOIS namespaces (em `databases`, para o operador criar a role; no
@@ -228,8 +234,10 @@ preview:
 #       podAnnotations: {}        # sobrepoe `podAnnotations`
 workers: {}
 
-# JOB DE MIGRACAO — o esquema do banco muda aqui, com uma credencial so dele,
-# para o app poder rodar com uma role sem DDL. Exige `database.enabled`.
+# JOB DE MIGRACAO — o esquema do banco muda aqui, com uma credencial so dele.
+# O chart recusa o mesmo Secret no Job e no app (`database.secret`) ou num
+# worker. Que o app fique sem DDL depende de a credencial DELE ser de uma role
+# sem DDL, criada fora do chart. Exige `database.enabled`.
 #
 # Em producao e um gancho PreSync do Argo CD: roda e termina antes de qualquer
 # outro objeto do sync, e se falha o sync para. No preview e um gancho Sync
@@ -237,7 +245,8 @@ workers: {}
 # banco efemero e com a credencial dele.
 #
 # O Job recebe a versao, o OpenTelemetry, o endereco do banco, a credencial de
-# `database.secret` e `env` — e NAO o `env` nem o `envFrom` do app.
+# `migration.database.secret` e `migration.env` — e NAO o `env` nem o
+# `envFrom` do app.
 migration:
   enabled: false
   # Obrigatorio: command ou args. Sem eles o Job rodaria o app, que nao termina.
@@ -252,7 +261,8 @@ migration:
   database:
     # Secret NO NAMESPACE DO APP com a credencial da role dona do esquema, no
     # mesmo formato do `<app>-db`: username, password, DATABASE_URL e
-    # ConnectionStrings__Default. Obrigatorio em producao; no preview e
+    # ConnectionStrings__Default. Obrigatorio em producao, e outro que o do
+    # app (`database.secret`) e o de cada worker. No preview e
     # ignorado (a credencial e a do banco efemero).
     secret: ""
   # 0: uma migracao que falha nao e repetida pelo Job. Quem tenta de novo e o

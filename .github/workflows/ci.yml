@@ -327,7 +327,35 @@ jobs:
                   if not any(r["from"][0].get("podSelector", {}).get("matchExpressions") == [{"key": "app.kubernetes.io/component", "operator": "In", "values": ["fila", "migration"]}] for r in np["spec"]["ingress"]): falha("a migracao nao alcanca o banco efemero")
           print("migracao ok")
           FIMPY
+          # database.secret: o app (e o worker sem credencial propria) le outro
+          # Secret em producao; o DatabaseRole continua no <app>-db; no preview
+          # o campo some. Vazio, nada muda.
+          helm template exemplo charts/app "${base[@]}" --set database.secret= > "$T/mg-app-vazio.yaml"
+          diff "$T/mg-sem.yaml" "$T/mg-app-vazio.yaml"
+          helm template exemplo charts/app "${base[@]}" "${mg[@]}" --set database.secret=exemplo-api-db --set 'workers.fila.args[0]=w' > "$T/mg-app.yaml"
+          helm template pr-42-exemplo charts/app "${base[@]}" "${mg[@]}" "${pv[@]}" --set database.secret=exemplo-api-db > "$T/mg-app-pv.yaml"
+          if grep -n 'exemplo-api-db' "$T/mg-app-pv.yaml"; then echo "::error::database.secret de producao no preview"; exit 1; fi
+          python3 - <<'FIMPY'
+          import os, yaml
+          T = os.environ["T"]
+          def falha(m): raise SystemExit("FALHA: " + m)
+          docs = [d for d in yaml.safe_load_all(open(f"{T}/mg-app.yaml")) if d]
+          def pguser(kind):
+              d = next(d for d in docs if d["kind"] == kind)
+              env = {e["name"]: e for e in d["spec"]["template"]["spec"]["containers"][0]["env"]}
+              return env["PGUSER"]["valueFrom"]["secretKeyRef"]["name"]
+          if pguser("Rollout") != "exemplo-api-db": falha("o Rollout le database.secret")
+          if pguser("Deployment") != "exemplo-api-db": falha("o worker sem credencial propria le a do app")
+          if pguser("Job") != "exemplo-dono-db": falha("o Job le a da migracao")
+          role = next(d for d in docs if d["kind"] == "DatabaseRole")
+          if role["spec"]["passwordSecret"]["name"] != "exemplo-db": falha("o DatabaseRole continua no <app>-db")
+          print("database.secret ok")
+          FIMPY
           recusa() { local m=$1; shift; local e; if e=$(helm template x charts/app "${base[@]}" "$@" 2>&1 >/dev/null); then echo "::error::aceitou: $*"; exit 1; fi; grep -qF -- "$m" <<<"$e" || { echo "::error::recusou por outro motivo: $e"; exit 1; }; }
+          # O mesmo Secret no app e na migracao, pelos tres caminhos.
+          recusa "o mesmo Secret do app" "${mg[@]}" --set migration.database.secret=exemplo-db
+          recusa "o mesmo Secret do app" "${mg[@]}" --set database.secret=exemplo-dono-db
+          recusa "o mesmo Secret da migracao" "${mg[@]}" --set 'workers.fila.args[0]=w' --set workers.fila.database.secret=exemplo-dono-db
           recusa "exige database.enabled" "${mg[@]}" --set database.enabled=false
           recusa "falta command ou args" --set migration.enabled=true --set migration.database.secret=s
           recusa "migration.database.secret e obrigatorio" --set migration.enabled=true --set 'migration.args[0]=m'

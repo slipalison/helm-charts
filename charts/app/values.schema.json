@@ -82,6 +82,11 @@
         },
         "cluster": { "type": "string", "minLength": 1 },
         "clusterNamespace": { "type": "string", "minLength": 1 },
+        "secret": {
+          "type": "string",
+          "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$",
+          "description": "Secret, no namespace do app, que o Rollout le em producao. Vazio = <app>-db, a credencial da role dona. Ignorado no preview."
+        },
         "connectionLimit": {
           "type": "integer",
           "minimum": 1,

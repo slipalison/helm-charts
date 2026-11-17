@@ -19,7 +19,7 @@ produz:
 | `PodDisruptionBudget` | Uma drenagem de no nao leva as duas replicas juntas |
 | `Database` do CloudNativePG | Banco, usuario e Secret criados com o app |
 | `Deployment` por worker, opcional | O mesmo binario em outro papel, com os cuidados do app e nenhuma porta de entrada |
-| `Job` de migracao, opcional | O esquema muda num gancho do Argo CD, com credencial propria; o app fica sem DDL |
+| `Job` de migracao, opcional | O esquema muda num gancho do Argo CD, com um Secret que nao e o do app; o app so fica sem DDL quando a credencial dele for de uma role sem DDL |
 | Variaveis `OTEL_*` apontando para o Alloy | O SDK do app acha o coletor sozinho, sem configuracao |
 
 ### Usar
@@ -116,7 +116,9 @@ database:
 O pod recebe `PGHOST`, `PGPORT`, `PGDATABASE` e `PGSSLMODE` em texto puro — o
 chart já sabe esses valores, e eles não ganham nada em virar Secret — mais
 `PGUSER`, `PGPASSWORD`, `DATABASE_URL` e `ConnectionStrings__Default` vindos do
-Secret `<app>-db`, **do próprio namespace**.
+Secret `<app>-db`, **do próprio namespace**. Com `database.secret`, o pod lê
+outro Secret, no mesmo formato, e o `<app>-db` fica só para a role do app (é o
+caso do app com Job de migração, mais abaixo).
 
 Não basta o `enabled: true`. A senha precisa existir selada nos dois lados, e
 quem faz isso é um comando só, que a sorteia e nunca a mostra:
@@ -302,13 +304,21 @@ migracao.
 ### Job de migracao: o esquema muda com credencial propria
 
 `migration` declara um Job que roda a migracao do banco com uma credencial
-**so dele** — a da role dona do esquema. E o que deixa o app rodar com uma
-role sem DDL: quem cria e altera tabela e o Job, e a credencial dele nao chega
-a pod nenhum do app.
+**so dele** — a da role dona do esquema —, que nao chega a pod nenhum do app.
+
+O que o chart garante, e so isto: o Job, o app e cada worker leem Secrets de
+**nomes diferentes**, e o render recusa o mesmo Secret no Job e no app (ou num
+worker). O que o chart **nao** garante: que o app fique sem DDL. Sem
+`database.secret`, o app le o `<app>-db`, que e a senha da role `<app>` — a
+dona do banco que o proprio chart declara. O app so fica sem DDL quando
+`database.secret` aponta para a credencial de uma role sem DDL, e essa role e
+os `GRANT` dela nascem fora do chart (na plataforma do banco, ou na propria
+migracao).
 
 ```yaml
 database:
   enabled: true           # obrigatorio
+  secret: meu-app-api-db  # o Secret do app em producao; vazio = <app>-db (a role dona)
 migration:
   enabled: true
   args: ["migrate"]       # obrigatorio: command ou args
@@ -320,10 +330,11 @@ migration:
   activeDeadlineSeconds: 600
 ```
 
-O Secret de `database.secret` fica no namespace do app, no mesmo formato do
-`<app>-db` (`username`, `password`, `DATABASE_URL`,
-`ConnectionStrings__Default`), e nasce de um SealedSecret, como ele. O chart
-nao cria a role dona: ela e da plataforma do banco.
+O Secret de `migration.database.secret` (e o de `database.secret`) fica no
+namespace do app, no mesmo formato do `<app>-db` (`username`, `password`,
+`DATABASE_URL`, `ConnectionStrings__Default`), e nasce de um SealedSecret, como
+ele. O chart nao cria a role dona nem a role do app: as duas sao da plataforma
+do banco.
 
 | | Producao | Preview |
 |---|---|---|
@@ -353,8 +364,9 @@ Duas ressalvas, ditas de proposito:
   seguinte).
 
 Recusa no render: `migration` sem `database.enabled`, sem `command` nem `args`
-(rodaria o app, que nao termina), sem `database.secret` em producao, com
-recursos incompletos ou com `env` que nomeia variavel do chart.
+(rodaria o app, que nao termina), sem `migration.database.secret` em producao,
+com o mesmo Secret do app (`database.secret`, ou `<app>-db` sem ele) ou de um
+worker, com recursos incompletos ou com `env` que nomeia variavel do chart.
 
 ### O que o chart NAO deixa voce fazer
 

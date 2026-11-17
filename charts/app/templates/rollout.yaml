@@ -76,7 +76,7 @@ spec:
             - name: http
               containerPort: {{ .Values.port }}
           env:
-            {{- include "app.env" (dict "ctx" . "segredoBanco" (include "app.dbSecret" .)) | nindent 12 }}
+            {{- include "app.env" (dict "ctx" . "segredoBanco" (include "app.dbSecretDoApp" .)) | nindent 12 }}
           {{- with .Values.envFrom }}
           envFrom:
             {{- toYaml . | nindent 12 }}

@@ -43,7 +43,7 @@ proprio sidecar (sondas e metricas).
 {{- $porta := $w.port | default (include "app.probePort" $ | int) }}
 {{- $sondas := mergeOverwrite (deepCopy $.Values.probes) ($w.probes | default dict) }}
 {{- $anotacoes := mergeOverwrite (deepCopy ($.Values.podAnnotations | default dict)) ($w.podAnnotations | default dict) }}
-{{- $segredo := include "app.dbSecret" $ }}
+{{- $segredo := include "app.dbSecretDoApp" $ }}
 {{- if and $w.database $w.database.secret (not (include "app.bancoPreview" $)) }}
 {{- $segredo = $w.database.secret }}
 {{- end }}
