@@ -185,6 +185,72 @@ jobs:
           recusa "missing property 'key'" --set preview.secretEnv.CHAVE.secret=exemplo-preview
           recusa "additional properties 'outra'" --set preview.secretEnv.CHAVE.secret=s --set preview.secretEnv.CHAVE.key=k --set preview.secretEnv.CHAVE.outra=1
 
+      - name: workers
+        # Deployments extras com a mesma imagem. Sem `workers` nada muda; com
+        # ele, o worker tem a imagem, o env e os cuidados do app, e nenhuma
+        # porta de entrada.
+        run: |
+          set -euo pipefail
+          base=(--set name=exemplo --set owner=equipe
+                --set image.repository=ghcr.io/slipalison/exemplo
+                --set image.tag=sha-abc1234 --set versao=1.2.3
+                --set database.enabled=true --set probes.port=9090
+                --set 'env[0].name=A' --set 'env[0].value=producao')
+          wk=(--set 'workers.fila.args[0]=worker' --set 'workers.fila.env[0].name=PAPEL'
+              --set 'workers.fila.env[0].value=fila' --set 'workers.fila.env[1].name=A'
+              --set 'workers.fila.env[1].value=do-worker' --set workers.fila.database.secret=exemplo-fila-db
+              --set workers.fila.resources.requests.cpu=10m --set workers.fila.resources.requests.memory=32Mi
+              --set workers.fila.resources.limits.memory=64Mi)
+          pv=(--set preview.numero=42 --set preview.tag=pr-42-abcdef0)
+          helm template exemplo charts/app "${base[@]}" > /tmp/wk-sem.yaml
+          helm template exemplo charts/app "${base[@]}" --set-json 'workers={}' > /tmp/wk-vazio.yaml
+          diff /tmp/wk-sem.yaml /tmp/wk-vazio.yaml
+          if grep -q '^kind: Deployment$' /tmp/wk-sem.yaml; then echo "::error::Deployment sem workers"; exit 1; fi
+          helm template exemplo charts/app "${base[@]}" "${wk[@]}" > /tmp/wk.yaml
+          helm template pr-42-exemplo charts/app "${base[@]}" "${wk[@]}" "${pv[@]}" --set preview.env.A=preview > /tmp/wk-pv.yaml
+          python3 - <<'FIMPY'
+          import yaml
+          def falha(m): raise SystemExit("FALHA: " + m)
+          def carrega(p): return [d for d in yaml.safe_load_all(open(p)) if d]
+          for arq, pv in (("/tmp/wk.yaml", False), ("/tmp/wk-pv.yaml", True)):
+              docs = carrega(arq)
+              app = "pr-42-exemplo" if pv else "exemplo"
+              deps = [d for d in docs if d["kind"] == "Deployment"]
+              if [d["metadata"]["name"] for d in deps] != [app + "-fila"]: falha(f"{arq}: deployments {deps}")
+              dep = deps[0]; pod = dep["spec"]["template"]; c = pod["spec"]["containers"][0]
+              ro = next(d for d in docs if d["kind"] == "Rollout")["spec"]["template"]["spec"]["containers"][0]
+              if c["image"] != ro["image"]: falha("a imagem do worker e a do app")
+              if c["args"] != ["worker"]: falha("args do worker")
+              if [p["containerPort"] for p in c["ports"]] != [9090]: falha("so a porta operacional")
+              if c["readinessProbe"]["httpGet"]["port"] != 9090 or c["livenessProbe"]["httpGet"]["port"] != 9090: falha("sondas")
+              if pod["spec"]["securityContext"] != next(d for d in docs if d["kind"] == "Rollout")["spec"]["template"]["spec"]["securityContext"]: falha("securityContext do pod")
+              if c["securityContext"] != ro["securityContext"]: falha("securityContext do container")
+              nomes_ro = [e["name"] for e in ro["env"]]; nomes = [e["name"] for e in c["env"]]
+              if nomes != nomes_ro + ["PAPEL"]: falha(f"env do worker: {nomes}")
+              env = {e["name"]: e for e in c["env"]}
+              esperado_a = "preview" if pv else "do-worker"
+              if env["A"].get("value") != esperado_a: falha(f"A: {env['A']}")
+              segredo = "banco-app" if pv else "exemplo-fila-db"
+              if env["PGUSER"]["valueFrom"]["secretKeyRef"]["name"] != segredo: falha(f"credencial do banco: {env['PGUSER']}")
+              if pv and "exemplo-fila-db" in open(arq).read(): falha("credencial de producao do worker no preview")
+              if dep["spec"]["replicas"] != 1: falha("replicas")
+              svc = next(d for d in docs if d["kind"] == "Service")
+              if all(pod["metadata"]["labels"].get(k) == v for k, v in svc["spec"]["selector"].items()): falha("o Service do app alcanca o worker")
+              if pod["metadata"]["labels"]["app.kubernetes.io/component"] != "fila": falha("rotulo de componente")
+              aps = [d for d in docs if d["kind"] == "AuthorizationPolicy" and d["spec"]["selector"]["matchLabels"] == {"app": app + "-fila"}]
+              if len(aps) != 1 or aps[0]["spec"]["rules"] != [{"to": [{"operation": {"ports": ["15020", "15021", "15090"]}}]}]: falha("AuthorizationPolicy do worker")
+              if pv:
+                  np = next(d for d in docs if d["kind"] == "NetworkPolicy" and d["metadata"]["name"].endswith("-banco"))
+                  if not any(r["from"][0].get("podSelector", {}).get("matchExpressions") == [{"key": "app.kubernetes.io/component", "operator": "In", "values": ["fila"]}] for r in np["spec"]["ingress"]): falha("o worker nao alcanca o banco efemero")
+          print("workers ok")
+          FIMPY
+          recusa() { local m=$1; shift; local e; if e=$(helm template x charts/app "${base[@]}" "$@" 2>&1 >/dev/null); then echo "::error::aceitou: $*"; exit 1; fi; grep -qF -- "$m" <<<"$e" || { echo "::error::recusou por outro motivo: $e"; exit 1; }; }
+          recusa "falta command ou args" --set workers.fila.replicas=1
+          recusa "limits.memory" --set 'workers.fila.args[0]=w' --set workers.fila.resources.requests.cpu=10m
+          recusa "escrita pelo proprio chart" --set 'workers.fila.args[0]=w' --set 'workers.fila.env[0].name=DATABASE_URL' --set 'workers.fila.env[0].value=x'
+          recusa "invalid propertyName 'migration'" --set 'workers.migration.args[0]=w'
+          recusa "invalid propertyName 'Fila'" --set 'workers.Fila.args[0]=w'
+
   publicar:
     name: Publicar OCI
     needs: [versao, lint]

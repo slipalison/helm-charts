@@ -200,6 +200,34 @@ preview:
       limits:
         memory: 256Mi
 
+# WORKERS — Deployments extras com a MESMA imagem e `command`/`args` proprios:
+# o processo que consome uma fila, por exemplo. Cada chave e um worker, e o
+# Deployment se chama `<name>-<chave>`. Mapa, e nao lista, para o values do
+# preview poder mudar um campo de um worker sem reescrever os outros.
+#
+# O worker herda do app a imagem (no preview, a do PR), o pull secret, o
+# securityContext, a NetworkPolicy, o sidecar e o `env` inteiro (versao,
+# OpenTelemetry, `env`, as sobreposicoes do preview e o banco). Nao tem
+# Service nem rota: ninguem de fora fala com ele, e a AuthorizationPolicy dele
+# so deixa passar as portas do sidecar. No preview, uma replica.
+#
+#   workers:
+#     fila:
+#       args: ["worker"]          # obrigatorio: command ou args
+#       replicas: 1               # padrao 1
+#       port: 9090                # sondas e metricas; padrao probes.port, ou port
+#       resources:                # padrao: os do app. O Kyverno exige os tres
+#         requests: {cpu: 10m, memory: 32Mi}
+#         limits: {memory: 128Mi}
+#       env:                      # por cima do env do app, pelo nome
+#         - name: PAPEL
+#           value: fila
+#       database:
+#         secret: meu-app-fila-db # credencial propria; padrao a do app
+#       probes: {}                # sobrepoe `probes` campo a campo
+#       podAnnotations: {}        # sobrepoe `podAnnotations`
+workers: {}
+
 podAnnotations: {}
 nodeSelector: {}
 tolerations: []

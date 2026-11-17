@@ -18,6 +18,7 @@ produz:
 | `AuthorizationPolicy` so-pelo-gateway | mTLS diz quem e; isto diz o que pode |
 | `PodDisruptionBudget` | Uma drenagem de no nao leva as duas replicas juntas |
 | `Database` do CloudNativePG | Banco, usuario e Secret criados com o app |
+| `Deployment` por worker, opcional | O mesmo binario em outro papel, com os cuidados do app e nenhuma porta de entrada |
 | Variaveis `OTEL_*` apontando para o Alloy | O SDK do app acha o coletor sozinho, sem configuracao |
 
 ### Usar
@@ -247,6 +248,55 @@ os previews novos; um aberto precisa renascer.
 
 O desenho inteiro, com o que o app precisa ter para entrar, esta em
 `distros-setup/proxmox/PLANO-PREVIEW.md`.
+
+### Workers: o mesmo binario, outro papel
+
+`workers` declara Deployments extras com a **mesma imagem** do app e
+`command`/`args` proprios — o processo que consome uma fila, por exemplo. Cada
+chave e um worker, e o Deployment se chama `<name>-<chave>`. Mapa, e nao lista,
+pelo mesmo motivo do `preview.env`: o values do preview muda um campo de um
+worker sem reescrever os outros.
+
+```yaml
+probes:
+  port: 9090              # o worker sonda a mesma porta interna do app
+workers:
+  fila:
+    args: ["worker"]      # obrigatorio: command ou args
+    replicas: 1           # padrao 1; no preview, sempre 1
+    resources:            # padrao: os do app
+      requests: {cpu: 10m, memory: 32Mi}
+      limits: {memory: 128Mi}
+    env:                  # por cima do env do app, pelo nome
+      - name: PAPEL
+        value: fila
+    database:
+      secret: meu-app-fila-db   # credencial propria; padrao a do app
+```
+
+| O worker herda do app | Por que |
+|---|---|
+| imagem e tag (no preview, a do PR), pull secret, ServiceAccount | E o mesmo binario; uma tag a parte deixaria o worker numa versao e o app em outra |
+| `securityContext` (nao-root, rootfs somente leitura, sem capability), `/tmp` em memoria | Os mesmos cuidados do Rollout, e o Kyverno recusa o pod sem eles |
+| o `env` inteiro: versao, OpenTelemetry, `env`, `preview.env`/`preview.secretEnv` e o banco | Uma variavel nova no app chega ao worker sem segunda edicao. O `env` do worker entra por cima, pelo nome; no preview, a sobreposicao do preview ganha dele |
+| a NetworkPolicy do namespace e o sidecar | O mesmo fechamento de rede e de saida |
+| `probes` e `podAnnotations`, com o que o worker sobrepoe | A raspagem por anotacao segue funcionando |
+
+O que ele **nao** tem: Service, rota, canary, HPA. Nenhum Service seleciona o
+pod (o rotulo `app` dele e `<name>-<chave>`), e a AuthorizationPolicy
+`<name>-<chave>-sem-entrada` so deixa passar as portas do sidecar — sem ela,
+um workload sem politica aceita tudo o que a NetworkPolicy deixar chegar. A
+porta declarada no container e so a das sondas e das metricas.
+
+No preview, a credencial do banco e sempre a do banco efemero (`banco-app`), e
+a NetworkPolicy `-banco` deixa os workers entrarem pela 5432.
+
+Recusa no render: worker sem `command` nem `args` (rodaria o app de novo),
+recursos sem `requests.cpu`, `requests.memory` e `limits.memory` (o Kyverno
+recusaria o pod, com o apply verde), um `env` que nomeia variavel do chart
+(`DATABASE_URL` inclusive: a credencial muda por `database.secret`, que no
+preview da lugar ao banco efemero) e o nome `migration`, que e do Job de
+migracao.
 
 ### O que o chart NAO deixa voce fazer
 

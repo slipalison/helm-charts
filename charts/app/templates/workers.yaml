@@ -1,0 +1,177 @@
+{{- /*
+WORKERS: Deployments extras com a MESMA imagem do app e `command`/`args`
+proprios. O caso tipico e o processo que consome uma fila: o mesmo binario,
+outro papel, sem trafego de fora.
+
+Cada chave de `workers` e um worker (um mapa, e nao uma lista, pelo mesmo
+motivo do `preview.env`: o Helm substitui listas, e o values do preview nao
+conseguiria mudar um campo de um worker sem reescrever todos). Sem `workers`,
+nada daqui e renderizado.
+
+O que o worker herda do app, para nao divergir dele:
+  - a imagem e a tag (no preview, a do PR), o pull secret, a ServiceAccount;
+  - o securityContext fixo do Rollout (nao-root, rootfs somente leitura, sem
+    capability nenhuma), o /tmp em memoria, nodeSelector e tolerations;
+  - o `env` INTEIRO do app (o helper `app.env`): versao, OpenTelemetry, o
+    `env` do values, as sobreposicoes do preview e o banco. O `env` do worker
+    entra por cima, pelo nome;
+  - a NetworkPolicy do namespace (`podSelector: {}`) e o sidecar do Istio;
+  - as sondas e as anotacoes do pod, com o que o worker sobrepoe.
+
+O que ele NAO tem: Service, VirtualService, canary, HPA. Ninguem de fora fala
+com um worker, e a AuthorizationPolicy dele so deixa passar as portas do
+proprio sidecar (sondas e metricas).
+*/ -}}
+{{- range $nome, $w := .Values.workers }}
+{{- if $w }}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $nome) }}
+{{- fail (printf "workers.%s: o nome do worker vira nome de Deployment; so minusculas, numeros e hifen." $nome) }}
+{{- end }}
+{{- if eq $nome "migration" }}
+{{- fail "workers.migration: o nome e do Job de migracao (bloco `migration`). Escolha outro." }}
+{{- end }}
+{{- $app := include "app.name" $ }}
+{{- $wnome := printf "%s-%s" $app $nome }}
+{{- if gt (len $wnome) 63 }}
+{{- fail (printf "workers.%s: '%s' passa de 63 caracteres, o teto de um rotulo." $nome $wnome) }}
+{{- end }}
+{{- if not (or $w.command $w.args) }}
+{{- fail (printf "workers.%s: falta command ou args. Sem eles o worker roda o entrypoint da imagem, que e o proprio app." $nome) }}
+{{- end }}
+{{- $recursos := $w.resources | default $.Values.resources }}
+{{- include "app.exigeRecursos" (dict "onde" (printf "workers.%s" $nome) "recursos" $recursos) }}
+{{- $porta := $w.port | default (include "app.probePort" $ | int) }}
+{{- $sondas := mergeOverwrite (deepCopy $.Values.probes) ($w.probes | default dict) }}
+{{- $anotacoes := mergeOverwrite (deepCopy ($.Values.podAnnotations | default dict)) ($w.podAnnotations | default dict) }}
+{{- $segredo := include "app.dbSecret" $ }}
+{{- if and $w.database $w.database.secret (not (include "app.bancoPreview" $)) }}
+{{- $segredo = $w.database.secret }}
+{{- end }}
+{{- $env := include "app.envComProprio" (dict "ctx" $ "onde" (printf "workers.%s" $nome) "base" (include "app.env" (dict "ctx" $ "segredoBanco" $segredo)) "proprio" ($w.env | default list)) | fromYamlArray }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $wnome }}
+  namespace: {{ $app }}
+  labels:
+    {{- include "app.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $nome }}
+spec:
+  replicas: {{ if include "app.emPreview" $ }}1{{ else }}{{ $w.replicas | default 1 }}{{ end }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: {{ $wnome }}
+  template:
+    metadata:
+      labels:
+        {{- include "app.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: {{ $nome }}
+        app: {{ $wnome }}
+      {{- with $anotacoes }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ $app }}
+      {{- with $.Values.image.pullSecret }}
+      imagePullSecrets:
+        - name: {{ . }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with $.Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $.Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: {{ $wnome }}
+      containers:
+        - name: {{ $nome }}
+          image: "{{ $.Values.image.repository }}:{{ include "app.tag" $ }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          {{- with $w.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $w.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            # So a porta das sondas e das metricas. Nenhum Service aponta para
+            # ela: quem a alcanca e o sidecar, por localhost, dentro do pod.
+            - name: operacional
+              containerPort: {{ $porta }}
+          env:
+            {{- toYaml $env | nindent 12 }}
+          {{- with $.Values.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml $recursos | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: {{ $sondas.readiness.path }}
+              port: {{ $porta }}
+            initialDelaySeconds: {{ $sondas.readiness.initialDelaySeconds }}
+            periodSeconds: {{ $sondas.readiness.periodSeconds }}
+          livenessProbe:
+            httpGet:
+              path: {{ $sondas.liveness.path }}
+              port: {{ $porta }}
+            initialDelaySeconds: {{ $sondas.liveness.initialDelaySeconds }}
+            periodSeconds: {{ $sondas.liveness.periodSeconds }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# Ninguem chama um worker. Esta politica so deixa passar as portas do proprio
+# sidecar (sondas e metricas mescladas); qualquer outra chamada, mesmo com mTLS
+# valido de um pod do mesmo namespace, e recusada. Sem ela, um workload sem
+# AuthorizationPolicy nenhuma aceita tudo o que a NetworkPolicy deixar chegar.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $wnome }}-sem-entrada
+  namespace: {{ $app }}
+  labels:
+    {{- include "app.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $nome }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ $wnome }}
+  action: ALLOW
+  rules:
+    - to:
+        - operation:
+            ports: ["15020", "15021", "15090"]
+{{- end }}
+{{- end }}

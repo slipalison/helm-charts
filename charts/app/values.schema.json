@@ -101,6 +101,33 @@
         }
       }
     },
+    "workers": {
+      "type": "object",
+      "description": "Deployments extras com a mesma imagem e command/args proprios. A chave e o nome do worker; o Deployment se chama <name>-<chave>.",
+      "propertyNames": { "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 20, "not": { "const": "migration" } },
+      "additionalProperties": {
+        "type": ["object", "null"],
+        "additionalProperties": false,
+        "properties": {
+          "command": { "type": "array", "items": { "type": "string" } },
+          "args": { "type": "array", "items": { "type": "string" } },
+          "replicas": { "type": "integer", "minimum": 1 },
+          "port": { "type": "integer", "minimum": 1024, "maximum": 65535 },
+          "resources": { "type": "object" },
+          "env": {
+            "type": "array",
+            "items": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" } } }
+          },
+          "database": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": { "secret": { "type": "string", "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$" } }
+          },
+          "probes": { "type": "object" },
+          "podAnnotations": { "type": "object" }
+        }
+      }
+    },
     "preview": {
       "type": "object",
       "additionalProperties": false,

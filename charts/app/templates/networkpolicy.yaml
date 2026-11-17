@@ -134,6 +134,19 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+    {{- with include "app.componentesComBanco" . | fromYamlArray }}
+    # Os workers (e o Job de migracao), que usam o mesmo banco.
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  {{- toYaml . | nindent 18 }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- end }}
     # O operador: status na 8000, e 5432 para as checagens de SQL.
     - from:
         - namespaceSelector:
