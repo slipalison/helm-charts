@@ -251,6 +251,10 @@ jobs:
           # O volume permitido passa: a isca reprova pelo nome, e nao pelo volume.
           plantar workers.yaml volume "        - name: s|          secret:|            secretName: exemplo-teste"
           helm template pr-42-exemplo "$T/sp-chart" "${base[@]}" "${pv[@]}" "${lista[@]}" > /dev/null
+          # initContainer: o chart nao gera nenhum, entao a isca planta um no
+          # Rollout, com um env que le um Secret fora da lista.
+          plantar rollout.yaml initContainer "      initContainers:|        - name: i|          image: ghcr.io/slipalison/exemplo:sha-abc1234|          env:|            - name: I|              valueFrom:|                secretKeyRef:|                  name: fora|                  key: k"
+          isca "Rollout/pr-42-exemplo le o Secret 'fora' (env I)" "$T/sp-chart" "${base[@]}" "${pv[@]}" "${lista[@]}"
           rm -rf "$T/sp-chart"
 
       - name: workers
