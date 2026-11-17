@@ -209,7 +209,7 @@
         "secretsPermitidos": {
           "type": "array",
           "items": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$", "maxLength": 253 },
-          "description": "Ligado por opcao: presente (mesmo vazia), o render do preview falha se um pod do app ler um Secret fora de banco-app, dos secret de secretEnv e desta lista."
+          "description": "Ligado por opcao: presente (mesmo vazia), o render do preview falha se um pod do app ler um Secret fora de banco-app e desta lista, se um secret de secretEnv nao estiver nela, ou se um pod usar a anotacao sidecar.istio.io/userVolume."
         },
         "banco": {
           "type": "object",

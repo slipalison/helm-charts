@@ -259,17 +259,29 @@ esquecido. Ligada por opcao, a lista fecha essa porta:
 ```yaml
 # apps/<app>/preview.yaml do homelab-gitops
 preview:
+  secretEnv:
+    CHAVE_DA_API: {secret: meu-app-preview, key: CHAVE_DA_API}
   secretsPermitidos: [meu-app-preview]   # presente, mesmo vazia, liga a conferencia
 ```
 
 Com a lista presente, o render do **preview** falha se um pod do app — o
-Rollout, um worker ou o Job de migracao — ler um Secret fora de `banco-app`, dos
-`secret` do `secretEnv` e da lista, por `env` (`secretKeyRef`), `envFrom`
-(`secretRef`) ou volume (`secret` e `projected`), em qualquer container ou
-initContainer. A mensagem diz o pod, o Secret e por onde. A conferencia le o
-pod como ele sai do render, e nao o values. Nao olha `imagePullSecrets` (quem
-le o pull secret e o kubelet, e nao o app), nem os pods do banco efemero. Sem a
-lista, ou em producao, o render nao muda uma linha.
+Rollout, um worker ou o Job de migracao — ler um Secret fora de `banco-app` e
+da lista, por `env` (`secretKeyRef`), `envFrom` (`secretRef`) ou volume
+(`secret` e `projected`), em qualquer container ou initContainer. A mensagem
+diz o pod, o Secret e por onde. Falha tambem:
+
+- se um `secret` do `secretEnv` nao estiver na lista. O `secretEnv` e um mapa,
+  mesclado entre as camadas do preview, e uma delas e o values do proprio PR:
+  sem esta regra, um Secret de producao escrito ali por engano entraria na
+  lista sozinho;
+- se um pod usar a anotacao `sidecar.istio.io/userVolume` (em `podAnnotations`
+  ou em `workers.<chave>.podAnnotations`). Ela monta volume no sidecar, num
+  JSON que o chart nao confere.
+
+A conferencia le o pod como ele sai do render, e nao o values. Nao olha
+`imagePullSecrets` (quem le o pull secret e o kubelet, e nao o app), nem os
+pods do banco efemero. Sem a lista, ou em producao, o render nao muda uma
+linha.
 
 A lista diz quais Secrets o preview pode ler, e nao de onde eles vem: um nome
 listado ainda pode ser a copia de um Secret de producao, se ele tiver o rotulo

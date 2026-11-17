@@ -198,8 +198,9 @@ jobs:
       - name: preview.secretsPermitidos
         # A lista fecha o que o secretEnv nao cobre: com ela, o render do
         # preview falha se um pod do app (API, worker, Job) ler um Secret fora
-        # de banco-app, dos secret do secretEnv e da lista, pelo env, pelo
-        # envFrom ou por um volume. Sem ela, ou em producao, nada muda.
+        # de banco-app e da lista, pelo env, pelo envFrom ou por um volume, se
+        # um secret do secretEnv nao estiver nela, ou se um pod usar a anotacao
+        # sidecar.istio.io/userVolume. Sem ela, ou em producao, nada muda.
         run: |
           set -euo pipefail
           # Um diretorio por run, e nao um caminho fixo: o validar-local roda
@@ -217,7 +218,7 @@ jobs:
           # O preview de base cobre CHAVE pelo secretEnv; `pv0` e o mesmo sem a cobertura.
           pv0=(--set preview.numero=42 --set preview.tag=pr-42-abcdef0)
           pv=("${pv0[@]}" --set preview.secretEnv.CHAVE.secret=exemplo-preview --set preview.secretEnv.CHAVE.key=CHAVE)
-          lista=(--set-json 'preview.secretsPermitidos=["exemplo-teste"]')
+          lista=(--set-json 'preview.secretsPermitidos=["exemplo-teste","exemplo-preview"]')
           # O que passa sai igual ao render sem a lista, e producao ignora a lista.
           helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" > "$T/sp-sem.yaml"
           helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" "${lista[@]}" > "$T/sp-com.yaml"
@@ -232,6 +233,14 @@ jobs:
           isca "Deployment/pr-42-exemplo-fila le o Secret 'fora' (env SO)" charts/app "${base[@]}" "${pv[@]}" "${lista[@]}" --set 'workers.fila.env[0].name=SO' --set 'workers.fila.env[0].valueFrom.secretKeyRef.name=fora' --set 'workers.fila.env[0].valueFrom.secretKeyRef.key=k'
           isca "Job/pr-42-exemplo-migration le o Secret 'fora' (env M)" charts/app "${base[@]}" "${pv[@]}" "${lista[@]}" --set 'migration.env[0].name=M' --set 'migration.env[0].valueFrom.secretKeyRef.name=fora' --set 'migration.env[0].valueFrom.secretKeyRef.key=k'
           isca "Rollout/pr-42-exemplo le o Secret 'exemplo-teste' (env CHAVE)" charts/app "${base[@]}" "${pv0[@]}" --set-json 'preview.secretsPermitidos=[]' --set 'env[0].valueFrom.secretKeyRef.name=exemplo-teste'
+          # O secret do secretEnv tambem tem de estar na lista: ele nao entra sozinho.
+          isca "preview.secretEnv.CHAVE le o Secret 'exemplo-preview', que nao esta na lista" charts/app "${base[@]}" "${pv[@]}" --set-json 'preview.secretsPermitidos=["exemplo-teste"]'
+          # A anotacao que monta volume no sidecar, no Rollout e so no worker.
+          uv='"[{\"name\":\"v\",\"secret\":{\"secretName\":\"exemplo-teste\"}}]"'
+          isca "Rollout/pr-42-exemplo usa a anotacao sidecar.istio.io/userVolume" charts/app "${base[@]}" "${pv[@]}" "${lista[@]}" --set-json "podAnnotations={\"sidecar.istio.io/userVolume\":$uv}"
+          isca "Deployment/pr-42-exemplo-fila usa a anotacao sidecar.istio.io/userVolume" charts/app "${base[@]}" "${pv[@]}" "${lista[@]}" --set-json "workers.fila.podAnnotations={\"sidecar.istio.io/userVolume\":$uv}"
+          # Sem a lista, nada disso e conferido: o render sai como antes.
+          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" --set-json "podAnnotations={\"sidecar.istio.io/userVolume\":$uv}" > /dev/null
           # Volume: o chart nao deixa o values montar um Secret, entao a isca e
           # numa copia do chart, com um volume plantado no Rollout e no Job.
           plantar() { rm -rf "$T/sp-chart"; cp -r charts/app "$T/sp-chart"; python3 .github/scripts/plantar.py "$T/sp-chart/templates/$1" "$2" "$3"; }

@@ -197,8 +197,9 @@ preview:
   secretEnv: {}
   # LISTA DE SECRETS PERMITIDOS NO PREVIEW, ligada por opcao. Presente (mesmo
   # vazia), o render do preview falha se um pod do app (Rollout, worker, Job)
-  # ler, por env, envFrom ou volume, um Secret fora de `banco-app`, dos
-  # `secret` do `secretEnv` e desta lista. E o que fecha o que o `secretEnv`
+  # ler, por env, envFrom ou volume, um Secret fora de `banco-app` e desta
+  # lista, se um `secret` do `secretEnv` nao estiver nela, ou se um pod usar a
+  # anotacao `sidecar.istio.io/userVolume`. E o que fecha o que o `secretEnv`
   # nao cobre. Comentado de proposito: a ausencia desliga a conferencia.
   # secretsPermitidos: [meu-app-preview]
   banco:
