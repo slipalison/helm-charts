@@ -41,6 +41,10 @@ jobs:
       - name: Preparar
         uses: slipalison/github-workflows/.github/actions/preparar@main
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        # Versao fixa: os passos conferem o texto dos erros do JSON Schema, e
+        # esse texto muda com o Helm. Subir aqui e subir junto o que se confere.
+        with:
+          version: v4.3.0
       - name: helm lint
         run: helm lint charts/app
       - name: helm template com os valores de exemplo
@@ -148,8 +152,10 @@ jobs:
         run: |
           set -euo pipefail
           # Um diretorio por run, e nao um caminho fixo: o validar-local roda
-          # estes passos no host, onde o /tmp sobrevive entre rodadas.
-          export T="${RUNNER_TEMP:-$(mktemp -d)}"
+          # estes passos no host, onde o /tmp sobrevive entre rodadas. Sem
+          # RUNNER_TEMP, o diretorio temporario e apagado na saida.
+          if [ -n "${RUNNER_TEMP:-}" ]; then T="$RUNNER_TEMP"; else T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT; fi
+          export T
           base=(--set name=exemplo --set owner=equipe
                 --set image.repository=ghcr.io/slipalison/exemplo
                 --set image.tag=sha-abc1234 --set versao=1.2.3
@@ -197,8 +203,10 @@ jobs:
         run: |
           set -euo pipefail
           # Um diretorio por run, e nao um caminho fixo: o validar-local roda
-          # estes passos no host, onde o /tmp sobrevive entre rodadas.
-          export T="${RUNNER_TEMP:-$(mktemp -d)}"
+          # estes passos no host, onde o /tmp sobrevive entre rodadas. Sem
+          # RUNNER_TEMP, o diretorio temporario e apagado na saida.
+          if [ -n "${RUNNER_TEMP:-}" ]; then T="$RUNNER_TEMP"; else T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT; fi
+          export T
           base=(--set name=exemplo --set owner=equipe
                 --set image.repository=ghcr.io/slipalison/exemplo
                 --set image.tag=sha-abc1234 --set database.enabled=true
@@ -253,8 +261,10 @@ jobs:
         run: |
           set -euo pipefail
           # Um diretorio por run, e nao um caminho fixo: o validar-local roda
-          # estes passos no host, onde o /tmp sobrevive entre rodadas.
-          export T="${RUNNER_TEMP:-$(mktemp -d)}"
+          # estes passos no host, onde o /tmp sobrevive entre rodadas. Sem
+          # RUNNER_TEMP, o diretorio temporario e apagado na saida.
+          if [ -n "${RUNNER_TEMP:-}" ]; then T="$RUNNER_TEMP"; else T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT; fi
+          export T
           base=(--set name=exemplo --set owner=equipe
                 --set image.repository=ghcr.io/slipalison/exemplo
                 --set image.tag=sha-abc1234 --set versao=1.2.3
@@ -343,8 +353,10 @@ jobs:
         run: |
           set -euo pipefail
           # Um diretorio por run, e nao um caminho fixo: o validar-local roda
-          # estes passos no host, onde o /tmp sobrevive entre rodadas.
-          export T="${RUNNER_TEMP:-$(mktemp -d)}"
+          # estes passos no host, onde o /tmp sobrevive entre rodadas. Sem
+          # RUNNER_TEMP, o diretorio temporario e apagado na saida.
+          if [ -n "${RUNNER_TEMP:-}" ]; then T="$RUNNER_TEMP"; else T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT; fi
+          export T
           base=(--set name=exemplo --set owner=equipe
                 --set image.repository=ghcr.io/slipalison/exemplo
                 --set image.tag=sha-abc1234 --set versao=1.2.3
@@ -457,7 +469,8 @@ jobs:
         run: |
           set -euo pipefail
           bash .github/scripts/conferir-pods-isca.sh
-          export T="${RUNNER_TEMP:-$(mktemp -d)}"
+          if [ -n "${RUNNER_TEMP:-}" ]; then T="$RUNNER_TEMP"; else T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT; fi
+          export T
           base=(--set name=exemplo --set owner=equipe
                 --set image.repository=ghcr.io/slipalison/exemplo
                 --set image.tag=sha-abc1234 --set database.enabled=true)
@@ -486,6 +499,10 @@ jobs:
       - name: Preparar
         uses: slipalison/github-workflows/.github/actions/preparar@main
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        # Versao fixa: os passos conferem o texto dos erros do JSON Schema, e
+        # esse texto muda com o Helm. Subir aqui e subir junto o que se confere.
+        with:
+          version: v4.3.0
       - name: Login no GHCR
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -5,14 +5,20 @@
 #   1. o render do chart com worker e Job de migracao, em producao e no
 #      preview, passa limpo;
 #   2. cada isca — o mesmo render com UM defeito plantado — e reprovada, e pelo
-#      motivo certo (a politica aparece na mensagem);
+#      motivo certo (a politica aparece na mensagem), inclusive as duas do
+#      Cluster do banco efemero, sobre o render do preview;
 #   3. os valores que produziriam esses defeitos ja sao recusados pelo proprio
 #      chart, no render, antes de chegar ao cluster.
 #
 # Roda da raiz do repositorio. Saida 0: tudo mordeu. Qualquer outra: o passo
 # que falhou, em stderr.
 set -euo pipefail
-T="${RUNNER_TEMP:-$(mktemp -d)}/conferir-pods"
+if [ -n "${RUNNER_TEMP:-}" ]; then
+  T="$RUNNER_TEMP/conferir-pods"
+else
+  raiz="$(mktemp -d)"; trap 'rm -rf "$raiz"' EXIT
+  T="$raiz/conferir-pods"
+fi
 rm -rf "$T"; mkdir -p "$T"
 conferir=.github/scripts/conferir-pods.py
 
@@ -31,9 +37,10 @@ helm template pr-42-exemplo charts/app "${base[@]}" \
 python3 "$conferir" "$T/prod.yaml" "$T/preview.yaml"
 
 # 2. Cada isca reprova, pela politica certa.
+# isca <nome> <trecho esperado da mensagem> <mutacao em Python> [prod|preview]
 isca() {
-  local nome=$1 esperado=$2 mutacao=$3
-  python3 - "$T/prod.yaml" "$T/isca-$nome.yaml" "$mutacao" <<'FIMPY'
+  local nome=$1 esperado=$2 mutacao=$3 origem=${4:-prod}
+  python3 - "$T/$origem.yaml" "$T/isca-$nome.yaml" "$mutacao" <<'FIMPY'
 import sys, yaml
 docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
 def um(tipo):
@@ -59,6 +66,9 @@ isca job-root               "exige-nao-root"          'del um("Job")["spec"]["te
 isca worker-sem-owner       "exige-rotulos"           'del um("Deployment")["metadata"]["labels"]["owner"]'
 isca rollout-outro-registro "registro-permitido"      'c("Rollout")["image"] = "docker.io/library/nginx:1.27.0"'
 isca sem-pod                "nao mediu nada"          'docs[:] = [d for d in docs if d["kind"] == "Namespace"]'
+# O Cluster do banco efemero so existe no preview: as duas iscas dele partem dali.
+isca cluster-sem-owner      "Cluster/banco: exige-rotulos: inheritedMetadata" 'del um("Cluster")["spec"]["inheritedMetadata"]["labels"]["owner"]' preview
+isca cluster-sem-limite     "Cluster/banco container postgres: exige-requests-e-limits: falta limits.memory" 'del um("Cluster")["spec"]["resources"]["limits"]' preview
 
 # Digest conta como fixo: nao pode ser isca.
 python3 - "$T/prod.yaml" "$T/digest.yaml" <<'FIMPY'

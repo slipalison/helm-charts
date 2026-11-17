@@ -444,9 +444,10 @@ python3 .github/scripts/conferir-pods.py render.yaml
 
 Ele nao ve o que o Istio injeta nem os pods que o operador do CloudNativePG cria.
 A isca, `.github/scripts/conferir-pods-isca.sh`, roda no CI antes de qualquer
-render ser conferido: o render limpo passa, nove copias com um defeito
-plantado cada uma sao reprovadas pela politica certa, e os valores que
-plantariam esses defeitos ja sao recusados pelo chart.
+render ser conferido: o render limpo passa, onze copias com um defeito
+plantado cada uma (duas delas no `Cluster` do banco efemero do preview) sao
+reprovadas pela politica certa, e os valores que plantariam esses defeitos ja
+sao recusados pelo chart.
 
 ### Publicar uma versao
 
