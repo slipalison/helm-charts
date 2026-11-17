@@ -161,7 +161,7 @@ owner: alison
 #   - uma replica, sem canary, sem HPA, sem PDB;
 #   - com `database.enabled`, um Postgres efemero DENTRO do namespace, e nunca o
 #     banco de producao — que fica ate fora de alcance de rede;
-#   - `preview.env` sobrepoe o `env` pelo nome.
+#   - `preview.env` e `preview.secretEnv` sobrepoem o `env` pelo nome.
 # Desenho completo: distros-setup/proxmox/PLANO-PREVIEW.md.
 preview:
   numero: ""
@@ -170,6 +170,24 @@ preview:
   # mapa, e nao lista, porque o Helm substitui listas inteiras: um `env:` aqui
   # apagaria as variaveis de producao. Ex.: o client_id de um login de teste.
   env: {}
+  # CREDENCIAIS PROPRIAS DO PREVIEW, como MAPA nome: {secret, key}. Cada
+  # variavel aqui SUBSTITUI a de mesmo nome do `env` de producao (ou entra, se
+  # nao existia) com um `secretKeyRef` para um Secret DO PREVIEW. E o jeito de o
+  # preview receber chaves e credenciais de teste em vez de uma copia do Secret
+  # de producao: com a variavel coberta aqui, o Secret de producao nem aparece
+  # no render do preview.
+  #
+  # O Secret nomeado precisa existir no namespace `pr-*`. O chart nao o cria
+  # (o chart e publico, e um SealedSecret so decifra no namespace para o qual
+  # foi selado): o caminho e um Secret SO DE TESTE no namespace de producao do
+  # app, com o rotulo de copia do Kyverno. Ver o README.
+  #
+  #   secretEnv:
+  #     CHAVE_DA_API:
+  #       secret: meu-app-preview
+  #       key: CHAVE_DA_API
+  #       optional: false     # opcional; o padrao do Kubernetes e false
+  secretEnv: {}
   banco:
     # A mesma imagem do cluster de producao (homelab-gitops,
     # platform/postgres/manifests/cluster.yaml). Mudou la, muda aqui.

@@ -180,7 +180,7 @@ igual** ao de antes deste bloco existir — conferido em `basalto`, `demo-python
 | Imagem e versao | `image.tag`, `versao` | `preview.tag`, que precisa ser `pr-<numero>-<7 hex>` |
 | Replicas | `replicas`, canary, HPA, PDB | 1, troca direta, sem HPA, sem PDB |
 | Banco | `Database` + `DatabaseRole` no cluster compartilhado | um `Cluster` do CNPG **dentro do namespace**, que morre com ele; o namespace nao ganha `db-access`, entao o banco de producao fica fora de alcance de rede |
-| `env` | a lista | a lista, com `preview.env` sobrepondo **pelo nome** |
+| `env` | a lista | a lista, com `preview.env` e `preview.secretEnv` sobrepondo **pelo nome** |
 | Telemetria | `deployment.environment=producao` | `preview`, e o `service.name` e o do preview |
 
 O banco efemero sai com o nome do banco e o dono de producao, credencial no
@@ -191,6 +191,59 @@ da NetworkPolicy padrao — a deles e a `-banco`, espelho da de `databases`.
 
 `preview.env` e um mapa, e nao uma lista, porque o Helm substitui listas: um
 `env:` no values do preview apagaria as variaveis de producao.
+
+#### Credenciais proprias do preview: `preview.secretEnv`
+
+`preview.env` so aceita valor em texto. Para a variavel que em producao vem de
+um Secret (uma chave de API, uma credencial de servico), o preview tinha duas
+saidas, e as duas sao ruins: receber uma **copia do Secret de producao** (o
+Kyverno copia para `pr-*` o Secret marcado com
+`preview.alisonamorim.com/copiar: "true"`) — e o codigo de um PR passa a ler a
+credencial real — ou ficar sem a variavel, e o que depende dela nao se valida
+no preview.
+
+`preview.secretEnv` e a terceira: um mapa `nome: {secret, key}` que, **so no
+preview**, troca a variavel de mesmo nome por um `secretKeyRef` para um Secret
+do preview, com credenciais de teste.
+
+```yaml
+# apps/<app>/preview.yaml do homelab-gitops
+preview:
+  secretEnv:
+    CHAVE_DA_API:
+      secret: meu-app-preview   # Secret so de teste
+      key: CHAVE_DA_API
+      optional: false           # opcional
+```
+
+- A variavel coberta **some** do preview na forma de producao: o nome do Secret
+  de producao nao aparece no render, e nenhum pod do preview o referencia. O CI
+  confere.
+- Nome que nao existia em producao entra, como no `preview.env`.
+- Em producao o bloco nao muda uma linha.
+- Recusa no render: o mesmo nome em `preview.env` e em `preview.secretEnv`, um
+  nome que o proprio chart escreve (`APP_VERSION`, `OTEL_*`, `PG*`,
+  `DATABASE_URL`, `ConnectionStrings__Default`) e `secret`/`key` ausentes.
+
+**De onde vem o Secret do preview.** O chart nao o cria, pelo mesmo motivo do
+pull secret: um SealedSecret so decifra no namespace para o qual foi selado, e
+o namespace do preview nasce a cada PR. O caminho e um Secret **so de teste**,
+selado para o namespace de producao do app, com o rotulo de copia:
+
+```yaml
+# SealedSecret em apps/<app>/ (ou onde o app guarda os seus), namespace <app>
+spec:
+  template:
+    metadata:
+      name: meu-app-preview
+      labels:
+        preview.alisonamorim.com/copiar: "true"
+```
+
+O Kyverno o copia para cada `pr-*` quando o namespace nasce. O Secret de
+producao continua **sem** o rotulo, e por isso nunca chega ao preview. A copia
+e tirada uma vez (`synchronize: false`): trocar a credencial de teste vale para
+os previews novos; um aberto precisa renascer.
 
 O desenho inteiro, com o que o app precisa ter para entrar, esta em
 `distros-setup/proxmox/PLANO-PREVIEW.md`.

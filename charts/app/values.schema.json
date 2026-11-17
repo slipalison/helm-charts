@@ -121,6 +121,21 @@
           "additionalProperties": { "type": ["string", "number", "boolean"] },
           "description": "Mapa nome: valor que sobrepoe o env pelo nome, so no preview. Mapa porque o Helm substitui listas inteiras."
         },
+        "secretEnv": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["secret", "key"],
+            "properties": {
+              "secret": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$", "maxLength": 253 },
+              "key": { "type": "string", "pattern": "^[-._a-zA-Z0-9]+$" },
+              "optional": { "type": "boolean" }
+            }
+          },
+          "description": "Mapa nome: {secret, key} que sobrepoe o env pelo nome com um secretKeyRef, so no preview. Para o preview ler credenciais proprias, de teste, em vez de uma copia do Secret de producao."
+        },
         "banco": {
           "type": "object",
           "additionalProperties": false,

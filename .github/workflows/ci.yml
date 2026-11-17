@@ -140,6 +140,51 @@ jobs:
           recusa --set preview.numero=1234 --set preview.tag=pr-1234-abcdef0 \
                  --set name=um-nome-de-aplicacao-comprido-demais         # passa de 40
 
+      - name: preview.secretEnv
+        # O preview com credencial propria, de teste: a variavel coberta por
+        # `preview.secretEnv` sai com um secretKeyRef para o Secret do preview,
+        # e o Secret de producao some do render. Em producao o bloco nao muda
+        # uma linha.
+        run: |
+          set -euo pipefail
+          base=(--set name=exemplo --set owner=equipe
+                --set image.repository=ghcr.io/slipalison/exemplo
+                --set image.tag=sha-abc1234 --set versao=1.2.3
+                --set database.enabled=true
+                --set 'env[0].name=CHAVE' --set 'env[0].valueFrom.secretKeyRef.name=exemplo-producao'
+                --set 'env[0].valueFrom.secretKeyRef.key=CHAVE'
+                --set 'env[1].name=B' --set 'env[1].value=fica')
+          seg=(--set preview.secretEnv.CHAVE.secret=exemplo-preview --set preview.secretEnv.CHAVE.key=CHAVE
+               --set preview.secretEnv.NOVA.secret=exemplo-preview --set preview.secretEnv.NOVA.key=NOVA
+               --set preview.secretEnv.NOVA.optional=true)
+          pv=(--set preview.numero=42 --set preview.tag=pr-42-abcdef0)
+          helm template exemplo charts/app "${base[@]}" > /tmp/seg-prod.yaml
+          helm template exemplo charts/app "${base[@]}" "${seg[@]}" > /tmp/seg-prod-com.yaml
+          diff /tmp/seg-prod.yaml /tmp/seg-prod-com.yaml
+          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" > /tmp/seg-pv-sem.yaml
+          grep -q 'name: exemplo-producao' /tmp/seg-pv-sem.yaml
+          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" "${seg[@]}" > /tmp/seg-pv.yaml
+          if grep -n 'exemplo-producao' /tmp/seg-pv.yaml; then echo "::error::o Secret de producao ficou no preview"; exit 1; fi
+          python3 - <<'FIMPY'
+          import yaml
+          docs = [d for d in yaml.safe_load_all(open("/tmp/seg-pv.yaml")) if d]
+          ro = next(d for d in docs if d["kind"] == "Rollout")
+          env = {e["name"]: e for e in ro["spec"]["template"]["spec"]["containers"][0]["env"]}
+          def falha(m): raise SystemExit("FALHA: " + m)
+          if env["CHAVE"].get("valueFrom") != {"secretKeyRef": {"name": "exemplo-preview", "key": "CHAVE"}}: falha(f"CHAVE: {env['CHAVE']}")
+          if env["NOVA"].get("valueFrom") != {"secretKeyRef": {"name": "exemplo-preview", "key": "NOVA", "optional": True}}: falha(f"NOVA: {env['NOVA']}")
+          if env["B"].get("value") != "fica": falha("B")
+          nomes = [e["name"] for e in ro["spec"]["template"]["spec"]["containers"][0]["env"]]
+          if len(nomes) != len(set(nomes)): falha(f"variavel duplicada: {nomes}")
+          print("secretEnv ok")
+          FIMPY
+          # Cada recusa pelo SEU motivo: a mensagem esperada tem de aparecer.
+          recusa() { local m=$1; shift; local e; if e=$(helm template x charts/app "${base[@]}" "${pv[@]}" "$@" 2>&1 >/dev/null); then echo "::error::aceitou: $*"; exit 1; fi; grep -qF -- "$m" <<<"$e" || { echo "::error::recusou por outro motivo: $e"; exit 1; }; }
+          recusa "em preview.env e em preview.secretEnv" --set preview.env.CHAVE=x "${seg[@]}"
+          recusa "escrita pelo proprio chart" --set preview.secretEnv.DATABASE_URL.secret=s --set preview.secretEnv.DATABASE_URL.key=k
+          recusa "missing property 'key'" --set preview.secretEnv.CHAVE.secret=exemplo-preview
+          recusa "additional properties 'outra'" --set preview.secretEnv.CHAVE.secret=s --set preview.secretEnv.CHAVE.key=k --set preview.secretEnv.CHAVE.outra=1
+
   publicar:
     name: Publicar OCI
     needs: [versao, lint]
