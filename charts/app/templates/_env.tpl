@@ -16,10 +16,21 @@ Parametros, num dict:
   semEnvDoApp  true deixa de fora o `env` do values e as sobreposicoes do
                preview: e o Job de migracao, que so precisa do banco e nao
                deve receber as credenciais do app
+  componente   o nome do worker, ou `migration` no Job; vazio no Rollout. Com
+               ele, a telemetria do processo sai como `<app>-<componente>`,
+               com `app.kubernetes.io/component=<componente>` nos atributos, e
+               nao se confunde com a da API. O `service.namespace` continua o
+               app, e e ele que junta os tres
 */}}
 {{- define "app.env" -}}
 {{- $c := .ctx -}}
 {{- $segredo := .segredoBanco -}}
+{{- $servico := include "app.name" $c -}}
+{{- $atributoComponente := "" -}}
+{{- with .componente -}}
+{{- $servico = printf "%s-%s" $servico . -}}
+{{- $atributoComponente = printf ",app.kubernetes.io/component=%s" . -}}
+{{- end -}}
 # A versao chega ao app como APP_VERSION, sempre. Sem isto, durante
 # um canary nao ha como a propria aplicacao dizer qual versao
 # respondeu — e um canary que nao se enxerga nao serve para decidir
@@ -47,11 +58,11 @@ Parametros, num dict:
 - name: OTEL_EXPORTER_OTLP_PROTOCOL
   value: {{ $c.Values.instrumentation.protocol | quote }}
 - name: OTEL_SERVICE_NAME
-  value: {{ include "app.name" $c | quote }}
+  value: {{ $servico | quote }}
 # service.version e o que liga um trace a uma versao durante o
 # canary; sem ela os dois lados do rollout viram o mesmo servico.
 - name: OTEL_RESOURCE_ATTRIBUTES
-  value: "service.version={{ include "app.versao" $c }},service.namespace={{ include "app.name" $c }},k8s.namespace.name={{ include "app.name" $c }},deployment.environment={{ include "app.ambiente" $c }}"
+  value: "service.version={{ include "app.versao" $c }},service.namespace={{ include "app.name" $c }},k8s.namespace.name={{ include "app.name" $c }},deployment.environment={{ include "app.ambiente" $c }}{{ $atributoComponente }}"
 {{- end }}
 {{- /*
 No preview, `preview.env` (um MAPA nome: valor) e `preview.secretEnv` (um

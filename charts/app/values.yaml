@@ -220,7 +220,8 @@ preview:
 #
 # O worker herda do app a imagem (no preview, a do PR), o pull secret, o
 # securityContext, a NetworkPolicy, o sidecar e o `env` inteiro (versao,
-# OpenTelemetry, `env`, as sobreposicoes do preview e o banco). Nao tem
+# OpenTelemetry, `env`, as sobreposicoes do preview e o banco); a telemetria
+# sai como o servico `<name>-<chave>`, para nao se misturar com a da API. Nao tem
 # Service nem rota: ninguem de fora fala com ele, e a AuthorizationPolicy dele
 # so deixa passar as portas do sidecar. No preview, uma replica.
 #

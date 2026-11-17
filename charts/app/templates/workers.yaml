@@ -47,7 +47,7 @@ proprio sidecar (sondas e metricas).
 {{- if and $w.database $w.database.secret (not (include "app.bancoPreview" $)) }}
 {{- $segredo = $w.database.secret }}
 {{- end }}
-{{- $env := include "app.envComProprio" (dict "ctx" $ "onde" (printf "workers.%s" $nome) "base" (include "app.env" (dict "ctx" $ "segredoBanco" $segredo)) "proprio" ($w.env | default list)) | fromYamlArray }}
+{{- $env := include "app.envComProprio" (dict "ctx" $ "onde" (printf "workers.%s" $nome) "base" (include "app.env" (dict "ctx" $ "segredoBanco" $segredo "componente" $nome)) "proprio" ($w.env | default list)) | fromYamlArray }}
 ---
 apiVersion: apps/v1
 kind: Deployment

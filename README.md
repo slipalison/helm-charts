@@ -307,7 +307,7 @@ workers:
 |---|---|
 | imagem e tag (no preview, a do PR), pull secret, ServiceAccount | E o mesmo binario; uma tag a parte deixaria o worker numa versao e o app em outra |
 | `securityContext` (nao-root, rootfs somente leitura, sem capability), `/tmp` em memoria | Os mesmos cuidados do Rollout, e o Kyverno recusa o pod sem eles |
-| o `env` inteiro: versao, OpenTelemetry, `env`, `preview.env`/`preview.secretEnv` e o banco | Uma variavel nova no app chega ao worker sem segunda edicao. O `env` do worker entra por cima, pelo nome; no preview, a sobreposicao do preview ganha dele |
+| o `env` inteiro: versao, OpenTelemetry, `env`, `preview.env`/`preview.secretEnv` e o banco | Uma variavel nova no app chega ao worker sem segunda edicao. O `env` do worker entra por cima, pelo nome; no preview, a sobreposicao do preview ganha dele. A telemetria sai como o servico `<name>-<chave>`, com `app.kubernetes.io/component=<chave>` nos atributos e o mesmo `service.namespace` do app, para nao se misturar com a da API |
 | a NetworkPolicy do namespace e o sidecar | O mesmo fechamento de rede e de saida |
 | `probes` e `podAnnotations`, com o que o worker sobrepoe | A raspagem por anotacao segue funcionando |
 
@@ -370,8 +370,9 @@ do banco.
 | Tentativas | `backoffLimit` (0): a falha para o sync | no minimo 3, com espera crescente (10 s, 20 s, 40 s): o banco efemero pode levar alguns segundos a mais que o `Cluster` para aceitar conexao |
 | Job anterior | `BeforeHookCreation`: apagado quando o proximo nasce; o ultimo fica, com o log | igual |
 
-O Job recebe a versao, a fiacao do OpenTelemetry, o endereco do banco, a
-credencial e `migration.env` — e **nao** recebe o `env` nem o `envFrom` do app:
+O Job recebe a versao, a fiacao do OpenTelemetry (como o servico
+`<name>-migration`, com `app.kubernetes.io/component=migration`), o endereco do
+banco, a credencial e `migration.env` — e **nao** recebe o `env` nem o `envFrom` do app:
 as chaves e credenciais do app nao tem o que fazer numa migracao. Fica na
 malha, com o sidecar **nativo** (`sidecar.istio.io/nativeSidecar: "true"`):
 o proxy sai quando o container termina. Sem sidecar nativo o Envoy seguiria de

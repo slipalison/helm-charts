@@ -58,7 +58,7 @@ autentica, e isso fica fora do chart.
 {{- end }}
 {{- $recursos := $m.resources | default .Values.resources }}
 {{- include "app.exigeRecursos" (dict "onde" "migration" "recursos" $recursos) }}
-{{- $env := include "app.envComProprio" (dict "ctx" . "onde" "migration" "base" (include "app.env" (dict "ctx" . "segredoBanco" $segredo "semEnvDoApp" true)) "proprio" ($m.env | default list)) | fromYamlArray }}
+{{- $env := include "app.envComProprio" (dict "ctx" . "onde" "migration" "base" (include "app.env" (dict "ctx" . "segredoBanco" $segredo "semEnvDoApp" true "componente" "migration")) "proprio" ($m.env | default list)) | fromYamlArray }}
 apiVersion: batch/v1
 kind: Job
 metadata:

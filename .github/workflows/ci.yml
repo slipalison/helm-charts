@@ -295,6 +295,11 @@ jobs:
               env = {e["name"]: e for e in c["env"]}
               esperado_a = "preview" if pv else "do-worker"
               if env["A"].get("value") != esperado_a: falha(f"A: {env['A']}")
+              # A telemetria do worker nao se confunde com a da API.
+              env_ro = {e["name"]: e for e in ro["env"]}
+              if env_ro["OTEL_SERVICE_NAME"]["value"] != app: falha("o servico da API nao muda")
+              if env["OTEL_SERVICE_NAME"]["value"] != app + "-fila": falha(f"servico do worker: {env['OTEL_SERVICE_NAME']}")
+              if env["OTEL_RESOURCE_ATTRIBUTES"]["value"] != env_ro["OTEL_RESOURCE_ATTRIBUTES"]["value"] + ",app.kubernetes.io/component=fila": falha("atributos do worker")
               segredo = "banco-app" if pv else "exemplo-fila-db"
               if env["PGUSER"]["valueFrom"]["secretKeyRef"]["name"] != segredo: falha(f"credencial do banco: {env['PGUSER']}")
               if pv and "exemplo-fila-db" in open(arq).read(): falha("credencial de producao do worker no preview")
@@ -372,6 +377,8 @@ jobs:
               env = {e["name"]: e for e in c["env"]}
               if "SO_DO_APP" in env: falha("o Job nao recebe o env do app")
               if env.get("MODO", {}).get("value") != "migracao": falha("env proprio")
+              if env["OTEL_SERVICE_NAME"]["value"] != app + "-migration": falha(f"servico do Job: {env['OTEL_SERVICE_NAME']}")
+              if not env["OTEL_RESOURCE_ATTRIBUTES"]["value"].endswith(",app.kubernetes.io/component=migration"): falha("atributos do Job")
               segredo = "banco-app" if pv else "exemplo-dono-db"
               for k in ("PGUSER", "PGPASSWORD"):
                   if env[k]["valueFrom"]["secretKeyRef"]["name"] != segredo: falha(f"{k}: {env[k]}")
