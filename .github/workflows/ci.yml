@@ -334,6 +334,28 @@ jobs:
           recusa "escrita pelo proprio chart" "${mg[@]}" --set 'migration.env[0].name=PGUSER'
           recusa "limits.memory" "${mg[@]}" --set migration.resources.requests.cpu=1m
 
+      - name: Politicas do Kyverno nos pods
+        # O cluster recusa, em Enforce, o POD sem requests/limits, com
+        # :latest, como root, de registro desconhecido, e o workload sem os
+        # rotulos de dono. Quatro delas olham o pod: o apply sai verde e o pod
+        # e que nao nasce. O conferidor le cada modelo de pod do render e e
+        # provado pela isca antes (um defeito plantado por vez).
+        run: |
+          set -euo pipefail
+          bash .github/scripts/conferir-pods-isca.sh
+          export T="${RUNNER_TEMP:-$(mktemp -d)}"
+          base=(--set name=exemplo --set owner=equipe
+                --set image.repository=ghcr.io/slipalison/exemplo
+                --set image.tag=sha-abc1234 --set database.enabled=true)
+          tudo=(--set 'workers.fila.args[0]=w' --set migration.enabled=true
+                --set 'migration.args[0]=m' --set migration.database.secret=s)
+          pv=(--set preview.numero=42 --set preview.tag=pr-42-abcdef0)
+          helm template exemplo charts/app "${base[@]}" > "$T/k-prod.yaml"
+          helm template exemplo charts/app "${base[@]}" "${tudo[@]}" > "$T/k-tudo.yaml"
+          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" > "$T/k-pv.yaml"
+          helm template pr-42-exemplo charts/app "${base[@]}" "${tudo[@]}" "${pv[@]}" > "$T/k-pv-tudo.yaml"
+          python3 .github/scripts/conferir-pods.py "$T"/k-*.yaml
+
   publicar:
     name: Publicar OCI
     needs: [versao, lint]

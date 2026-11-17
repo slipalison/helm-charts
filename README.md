@@ -367,6 +367,33 @@ Por desenho, e cada um ja custou caro a alguem:
   `.Values.egress`, e as faixas de casa e da tailnet ficam de fora sempre.
 - **ser chamado por outro app** — so o gateway entra.
 
+### As politicas do Kyverno, conferidas no render
+
+O cluster aplica cinco politicas em modo Enforce, e quatro olham o **pod**: o
+`apply` de um Deployment ou de um Job sai verde, e o pod e que e recusado ao
+nascer. `.github/scripts/conferir-pods.py` le cada modelo de pod de um render
+(Rollout, Deployment, StatefulSet, DaemonSet, Job, CronJob, e a imagem e os
+recursos do Cluster do CloudNativePG) e reprova:
+
+| Politica | O que o conferidor exige |
+|---|---|
+| `exige-requests-e-limits` | `requests.cpu`, `requests.memory` e `limits.memory` em todo container e initContainer |
+| `proibe-tag-latest` | tag fixa ou digest; sem tag e `:latest` implicito |
+| `exige-nao-root` | `runAsNonRoot: true` no pod, ou em todo container |
+| `registro-permitido` | imagem de `ghcr.io/slipalison/*` ou `ghcr.io/cloudnative-pg/*` (outra lista: `REGISTROS_PERMITIDOS`, padroes separados por espaco) |
+| `exige-rotulos` | `app.kubernetes.io/name` e `owner` no Deployment, StatefulSet, DaemonSet e Rollout |
+
+```bash
+helm template meu-app charts/app -f values.yaml > render.yaml
+python3 .github/scripts/conferir-pods.py render.yaml
+```
+
+Ele nao ve o que o Istio injeta nem os pods que o operador do CloudNativePG cria.
+A isca, `.github/scripts/conferir-pods-isca.sh`, roda no CI antes de qualquer
+render ser conferido: o render limpo passa, nove copias com um defeito
+plantado cada uma sao reprovadas pela politica certa, e os valores que
+plantariam esses defeitos ja sao recusados pelo chart.
+
 ### Publicar uma versao
 
 Commitar na `main` com a mensagem no padrao Conventional Commits. E so.
