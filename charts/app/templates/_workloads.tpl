@@ -127,3 +127,65 @@ Vazio em producao e sem migracao: o render nao muda.
 argocd.argoproj.io/sync-wave: "2"
 {{- end -}}
 {{- end -}}
+
+{{/*
+Os Secrets que os pods do app leem, como os pods SAEM do render, e nao como o
+values os descreve: um nome montado por template, ou uma variavel que so um
+worker tem, aparece aqui igual. Quem usa: a lista de Secrets permitidos do
+preview (preview-secrets.yaml) e a recusa do Secret da migracao no app e nos
+workers (migration.yaml).
+
+Le, em todo container e initContainer, o `env` (`secretKeyRef`) e o `envFrom`
+(`secretRef`), e os volumes do pod (`secret` e `projected`). Nao le
+`imagePullSecrets`: quem le o pull secret e o kubelet, e nao o processo do app.
+A anotacao `sidecar.istio.io/userVolume` monta volume no sidecar, num JSON que
+o chart nao confere; ela sai a parte, com o texto, para quem chama decidir.
+
+Parametros, num dict: `ctx` (o contexto raiz) e `arquivos` (os templates a
+ler, como "rollout.yaml"). Devolve YAML, um mapa:
+  refs        lista de {onde, secret, caminho}: `onde` e Kind/nome do objeto,
+              `caminho` e "env NOME", "envFrom" ou "volume NOME"
+  userVolume  lista de {onde, valor}
+*/}}
+{{- define "app.secretsDosPods" -}}
+{{- $ctx := .ctx -}}
+{{- $refs := list -}}
+{{- $userVolume := list -}}
+{{- range $arq := .arquivos -}}
+{{- $texto := include (printf "%s/%s" $ctx.Template.BasePath $arq) $ctx -}}
+{{- range $doc := regexSplit "(?m)^---[ \t]*$" $texto -1 -}}
+{{- $o := fromYaml $doc -}}
+{{- $pod := dig "spec" "template" "spec" dict $o -}}
+{{- if $pod -}}
+{{- $onde := printf "%s/%s" (dig "kind" "?" $o) (dig "metadata" "name" "?" $o) -}}
+{{- range $c := concat (dig "containers" list $pod) (dig "initContainers" list $pod) -}}
+{{- range $e := dig "env" list $c -}}
+{{- with dig "valueFrom" "secretKeyRef" "name" "" $e -}}
+{{- $refs = append $refs (dict "onde" $onde "secret" . "caminho" (printf "env %s" $e.name)) -}}
+{{- end -}}
+{{- end -}}
+{{- range $e := dig "envFrom" list $c -}}
+{{- with dig "secretRef" "name" "" $e -}}
+{{- $refs = append $refs (dict "onde" $onde "secret" . "caminho" "envFrom") -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- range $v := dig "volumes" list $pod -}}
+{{- with dig "secret" "secretName" "" $v -}}
+{{- $refs = append $refs (dict "onde" $onde "secret" . "caminho" (printf "volume %s" $v.name)) -}}
+{{- end -}}
+{{- range $s := dig "projected" "sources" list $v -}}
+{{- with dig "secret" "name" "" $s -}}
+{{- $refs = append $refs (dict "onde" $onde "secret" . "caminho" (printf "volume %s" $v.name)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $anotacoes := dig "spec" "template" "metadata" "annotations" dict $o -}}
+{{- if hasKey $anotacoes "sidecar.istio.io/userVolume" -}}
+{{- $userVolume = append $userVolume (dict "onde" $onde "valor" (get $anotacoes "sidecar.istio.io/userVolume" | toString)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- toYaml (dict "refs" $refs "userVolume" $userVolume) -}}
+{{- end -}}
