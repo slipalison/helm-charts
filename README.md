@@ -409,7 +409,7 @@ pe e o Job so acabaria no `activeDeadlineSeconds`, como falha. Uma
 AuthorizationPolicy `<name>-migration-sem-entrada` fecha a entrada, e no
 preview a NetworkPolicy `-banco` deixa o Job entrar pela 5432.
 
-Tres ressalvas, ditas de proposito:
+Quatro ressalvas, ditas de proposito:
 
 - **A migracao precisa ser idempotente: roda a cada sync.** O gancho roda em
   todo sync do Argo CD, inclusive nos do `selfHeal`, e nao so quando a imagem
@@ -422,6 +422,13 @@ Tres ressalvas, ditas de proposito:
   da versao anterior rodam sobre o esquema novo: a migracao precisa ser
   compativel com a versao anterior (expandir antes, contrair num deploy
   seguinte).
+- **O preview tolera o que a producao nao tolera.** No preview o Job tenta no
+  minimo 4 vezes; em producao, com o `backoffLimit` padrao (0), uma so. Uma
+  migracao intermitente, ou uma nao transacional que falha pela metade e passa
+  na segunda vez, fica verde no preview e quebra em producao, onde nao ha nova
+  tentativa. Uma migracao que so passa na segunda tentativa esta quebrada para
+  producao: confira o log do Job no `pr-*` (o pod de cada tentativa fica no
+  namespace ate o proximo sync).
 
 Recusa no render: `migration` sem `database.enabled`, sem `command` nem `args`
 (rodaria o app, que nao termina), sem `migration.database.secret` em producao,
