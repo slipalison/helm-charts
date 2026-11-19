@@ -41,6 +41,10 @@ jobs:
       - name: Preparar
         uses: slipalison/github-workflows/.github/actions/preparar@main
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        # Versao fixa: os passos conferem o texto dos erros do JSON Schema, e
+        # esse texto muda com o Helm. Subir aqui e subir junto o que se confere.
+        with:
+          version: v4.3.0
       - name: helm lint
         run: helm lint charts/app
       - name: helm template com os valores de exemplo
@@ -140,6 +144,361 @@ jobs:
           recusa --set preview.numero=1234 --set preview.tag=pr-1234-abcdef0 \
                  --set name=um-nome-de-aplicacao-comprido-demais         # passa de 40
 
+      - name: preview.secretEnv
+        # O preview com credencial propria, de teste: a variavel coberta por
+        # `preview.secretEnv` sai com um secretKeyRef para o Secret do preview,
+        # e o Secret de producao some do render. Em producao o bloco nao muda
+        # uma linha.
+        run: |
+          set -euo pipefail
+          # Um diretorio por run, e nao um caminho fixo: o validar-local roda
+          # estes passos no host, onde o /tmp sobrevive entre rodadas. Sem
+          # RUNNER_TEMP, o diretorio temporario e apagado na saida.
+          if [ -n "${RUNNER_TEMP:-}" ]; then T="$RUNNER_TEMP"; else T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT; fi
+          export T
+          base=(--set name=exemplo --set owner=equipe
+                --set image.repository=ghcr.io/slipalison/exemplo
+                --set image.tag=sha-abc1234 --set versao=1.2.3
+                --set database.enabled=true
+                --set 'env[0].name=CHAVE' --set 'env[0].valueFrom.secretKeyRef.name=exemplo-producao'
+                --set 'env[0].valueFrom.secretKeyRef.key=CHAVE'
+                --set 'env[1].name=B' --set 'env[1].value=fica')
+          seg=(--set preview.secretEnv.CHAVE.secret=exemplo-preview --set preview.secretEnv.CHAVE.key=CHAVE
+               --set preview.secretEnv.NOVA.secret=exemplo-preview --set preview.secretEnv.NOVA.key=NOVA
+               --set preview.secretEnv.NOVA.optional=true)
+          pv=(--set preview.numero=42 --set preview.tag=pr-42-abcdef0)
+          helm template exemplo charts/app "${base[@]}" > "$T/seg-prod.yaml"
+          helm template exemplo charts/app "${base[@]}" "${seg[@]}" > "$T/seg-prod-com.yaml"
+          diff "$T/seg-prod.yaml" "$T/seg-prod-com.yaml"
+          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" > "$T/seg-pv-sem.yaml"
+          grep -q 'name: exemplo-producao' "$T/seg-pv-sem.yaml"
+          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" "${seg[@]}" > "$T/seg-pv.yaml"
+          if grep -n 'exemplo-producao' "$T/seg-pv.yaml"; then echo "::error::o Secret de producao ficou no preview"; exit 1; fi
+          python3 - <<'FIMPY'
+          import os, yaml
+          T = os.environ["T"]
+          docs = [d for d in yaml.safe_load_all(open(f"{T}/seg-pv.yaml")) if d]
+          ro = next(d for d in docs if d["kind"] == "Rollout")
+          env = {e["name"]: e for e in ro["spec"]["template"]["spec"]["containers"][0]["env"]}
+          def falha(m): raise SystemExit("FALHA: " + m)
+          if env["CHAVE"].get("valueFrom") != {"secretKeyRef": {"name": "exemplo-preview", "key": "CHAVE"}}: falha(f"CHAVE: {env['CHAVE']}")
+          if env["NOVA"].get("valueFrom") != {"secretKeyRef": {"name": "exemplo-preview", "key": "NOVA", "optional": True}}: falha(f"NOVA: {env['NOVA']}")
+          if env["B"].get("value") != "fica": falha("B")
+          nomes = [e["name"] for e in ro["spec"]["template"]["spec"]["containers"][0]["env"]]
+          if len(nomes) != len(set(nomes)): falha(f"variavel duplicada: {nomes}")
+          print("secretEnv ok")
+          FIMPY
+          # Cada recusa pelo SEU motivo: a mensagem esperada tem de aparecer.
+          recusa() { local m=$1; shift; local e; if e=$(helm template x charts/app "${base[@]}" "${pv[@]}" "$@" 2>&1 >/dev/null); then echo "::error::aceitou: $*"; exit 1; fi; grep -qF -- "$m" <<<"$e" || { echo "::error::recusou por outro motivo: $e"; exit 1; }; }
+          recusa "em preview.env e em preview.secretEnv" --set preview.env.CHAVE=x "${seg[@]}"
+          recusa "escrita pelo proprio chart" --set preview.secretEnv.DATABASE_URL.secret=s --set preview.secretEnv.DATABASE_URL.key=k
+          recusa "missing property 'key'" --set preview.secretEnv.CHAVE.secret=exemplo-preview
+          recusa "additional properties 'outra'" --set preview.secretEnv.CHAVE.secret=s --set preview.secretEnv.CHAVE.key=k --set preview.secretEnv.CHAVE.outra=1
+
+      - name: preview.secretsPermitidos
+        # A lista fecha o que o secretEnv nao cobre: com ela, o render do
+        # preview falha se um pod do app (API, worker, Job) ler um Secret fora
+        # de banco-app e da lista, pelo env, pelo envFrom ou por um volume, se
+        # um secret do secretEnv nao estiver nela, ou se um pod usar a anotacao
+        # sidecar.istio.io/userVolume. Sem ela, ou em producao, nada muda.
+        run: |
+          set -euo pipefail
+          # Um diretorio por run, e nao um caminho fixo: o validar-local roda
+          # estes passos no host, onde o /tmp sobrevive entre rodadas. Sem
+          # RUNNER_TEMP, o diretorio temporario e apagado na saida.
+          if [ -n "${RUNNER_TEMP:-}" ]; then T="$RUNNER_TEMP"; else T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT; fi
+          export T
+          base=(--set name=exemplo --set owner=equipe
+                --set image.repository=ghcr.io/slipalison/exemplo
+                --set image.tag=sha-abc1234 --set database.enabled=true
+                --set 'env[0].name=CHAVE' --set 'env[0].valueFrom.secretKeyRef.name=exemplo-producao'
+                --set 'env[0].valueFrom.secretKeyRef.key=CHAVE'
+                --set 'workers.fila.args[0]=w' --set migration.enabled=true
+                --set 'migration.args[0]=m' --set migration.database.secret=exemplo-dono-db)
+          # O preview de base cobre CHAVE pelo secretEnv; `pv0` e o mesmo sem a cobertura.
+          pv0=(--set preview.numero=42 --set preview.tag=pr-42-abcdef0)
+          pv=("${pv0[@]}" --set preview.secretEnv.CHAVE.secret=exemplo-preview --set preview.secretEnv.CHAVE.key=CHAVE)
+          lista=(--set-json 'preview.secretsPermitidos=["exemplo-teste","exemplo-preview"]')
+          # O que passa sai igual ao render sem a lista, e producao ignora a lista.
+          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" > "$T/sp-sem.yaml"
+          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" "${lista[@]}" > "$T/sp-com.yaml"
+          diff "$T/sp-sem.yaml" "$T/sp-com.yaml"
+          helm template exemplo charts/app "${base[@]}" > "$T/sp-prod.yaml"
+          helm template exemplo charts/app "${base[@]}" "${lista[@]}" --set 'envFrom[0].secretRef.name=fora' > /dev/null
+          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" "${lista[@]}" --set 'envFrom[0].secretRef.name=exemplo-teste' > /dev/null
+          # Cada isca: um pod que le um Secret fora da lista, por um caminho.
+          isca() { local m=$1; shift; local e; if e=$(helm template pr-42-exemplo "$@" 2>&1 >/dev/null); then echo "::error::a lista deixou passar: $m"; exit 1; fi; grep -qF -- "$m" <<<"$e" || { echo "::error::recusou por outro motivo: $e"; exit 1; }; echo "isca reprovada: $m"; }
+          isca "Rollout/pr-42-exemplo le o Secret 'fora' (envFrom)" charts/app "${base[@]}" "${pv[@]}" "${lista[@]}" --set 'envFrom[0].secretRef.name=fora'
+          isca "Rollout/pr-42-exemplo le o Secret 'exemplo-producao' (env CHAVE)" charts/app "${base[@]}" "${pv0[@]}" "${lista[@]}"
+          isca "Deployment/pr-42-exemplo-fila le o Secret 'fora' (env SO)" charts/app "${base[@]}" "${pv[@]}" "${lista[@]}" --set 'workers.fila.env[0].name=SO' --set 'workers.fila.env[0].valueFrom.secretKeyRef.name=fora' --set 'workers.fila.env[0].valueFrom.secretKeyRef.key=k'
+          isca "Job/pr-42-exemplo-migration le o Secret 'fora' (env M)" charts/app "${base[@]}" "${pv[@]}" "${lista[@]}" --set 'migration.env[0].name=M' --set 'migration.env[0].valueFrom.secretKeyRef.name=fora' --set 'migration.env[0].valueFrom.secretKeyRef.key=k'
+          isca "Rollout/pr-42-exemplo le o Secret 'exemplo-teste' (env CHAVE)" charts/app "${base[@]}" "${pv0[@]}" --set-json 'preview.secretsPermitidos=[]' --set 'env[0].valueFrom.secretKeyRef.name=exemplo-teste'
+          # O secret do secretEnv tambem tem de estar na lista: ele nao entra sozinho.
+          isca "preview.secretEnv.CHAVE le o Secret 'exemplo-preview', que nao esta na lista" charts/app "${base[@]}" "${pv[@]}" --set-json 'preview.secretsPermitidos=["exemplo-teste"]'
+          # A anotacao que monta volume no sidecar, no Rollout e so no worker.
+          uv='"[{\"name\":\"v\",\"secret\":{\"secretName\":\"exemplo-teste\"}}]"'
+          isca "Rollout/pr-42-exemplo usa a anotacao sidecar.istio.io/userVolume" charts/app "${base[@]}" "${pv[@]}" "${lista[@]}" --set-json "podAnnotations={\"sidecar.istio.io/userVolume\":$uv}"
+          isca "Deployment/pr-42-exemplo-fila usa a anotacao sidecar.istio.io/userVolume" charts/app "${base[@]}" "${pv[@]}" "${lista[@]}" --set-json "workers.fila.podAnnotations={\"sidecar.istio.io/userVolume\":$uv}"
+          # Sem a lista, nada disso e conferido: o render sai como antes.
+          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" --set-json "podAnnotations={\"sidecar.istio.io/userVolume\":$uv}" > /dev/null
+          # Volume: o chart nao deixa o values montar um Secret, entao a isca e
+          # numa copia do chart, com um volume plantado no Rollout e no Job.
+          plantar() { rm -rf "$T/sp-chart"; cp -r charts/app "$T/sp-chart"; python3 .github/scripts/plantar.py "$T/sp-chart/templates/$1" "$2" "$3"; }
+          plantar rollout.yaml volume "        - name: s|          secret:|            secretName: fora"
+          isca "Rollout/pr-42-exemplo le o Secret 'fora' (volume s)" "$T/sp-chart" "${base[@]}" "${pv[@]}" "${lista[@]}"
+          plantar migration.yaml volume "        - name: p|          projected:|            sources:|              - secret:|                  name: fora"
+          isca "Job/pr-42-exemplo-migration le o Secret 'fora' (volume p)" "$T/sp-chart" "${base[@]}" "${pv[@]}" "${lista[@]}"
+          # O volume permitido passa: a isca reprova pelo nome, e nao pelo volume.
+          plantar workers.yaml volume "        - name: s|          secret:|            secretName: exemplo-teste"
+          helm template pr-42-exemplo "$T/sp-chart" "${base[@]}" "${pv[@]}" "${lista[@]}" > /dev/null
+          # initContainer: o chart nao gera nenhum, entao a isca planta um no
+          # Rollout, com um env que le um Secret fora da lista.
+          plantar rollout.yaml initContainer "      initContainers:|        - name: i|          image: ghcr.io/slipalison/exemplo:sha-abc1234|          env:|            - name: I|              valueFrom:|                secretKeyRef:|                  name: fora|                  key: k"
+          isca "Rollout/pr-42-exemplo le o Secret 'fora' (env I)" "$T/sp-chart" "${base[@]}" "${pv[@]}" "${lista[@]}"
+          rm -rf "$T/sp-chart"
+
+      - name: workers
+        # Deployments extras com a mesma imagem. Sem `workers` nada muda; com
+        # ele, o worker tem a imagem, o env e os cuidados do app, e nenhuma
+        # porta de entrada.
+        run: |
+          set -euo pipefail
+          # Um diretorio por run, e nao um caminho fixo: o validar-local roda
+          # estes passos no host, onde o /tmp sobrevive entre rodadas. Sem
+          # RUNNER_TEMP, o diretorio temporario e apagado na saida.
+          if [ -n "${RUNNER_TEMP:-}" ]; then T="$RUNNER_TEMP"; else T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT; fi
+          export T
+          base=(--set name=exemplo --set owner=equipe
+                --set image.repository=ghcr.io/slipalison/exemplo
+                --set image.tag=sha-abc1234 --set versao=1.2.3
+                --set database.enabled=true --set probes.port=9090
+                --set 'env[0].name=A' --set 'env[0].value=producao')
+          wk=(--set 'workers.fila.args[0]=worker' --set 'workers.fila.env[0].name=PAPEL'
+              --set 'workers.fila.env[0].value=fila' --set 'workers.fila.env[1].name=A'
+              --set 'workers.fila.env[1].value=do-worker' --set workers.fila.database.secret=exemplo-fila-db
+              --set workers.fila.resources.requests.cpu=10m --set workers.fila.resources.requests.memory=32Mi
+              --set workers.fila.resources.limits.memory=64Mi)
+          pv=(--set preview.numero=42 --set preview.tag=pr-42-abcdef0)
+          helm template exemplo charts/app "${base[@]}" > "$T/wk-sem.yaml"
+          helm template exemplo charts/app "${base[@]}" --set-json 'workers={}' > "$T/wk-vazio.yaml"
+          diff "$T/wk-sem.yaml" "$T/wk-vazio.yaml"
+          if grep -q '^kind: Deployment$' "$T/wk-sem.yaml"; then echo "::error::Deployment sem workers"; exit 1; fi
+          helm template exemplo charts/app "${base[@]}" "${wk[@]}" > "$T/wk.yaml"
+          helm template pr-42-exemplo charts/app "${base[@]}" "${wk[@]}" "${pv[@]}" --set preview.env.A=preview > "$T/wk-pv.yaml"
+          python3 - <<'FIMPY'
+          import os, yaml
+          T = os.environ["T"]
+          def falha(m): raise SystemExit("FALHA: " + m)
+          def carrega(p): return [d for d in yaml.safe_load_all(open(p)) if d]
+          for arq, pv in ((f"{T}/wk.yaml", False), (f"{T}/wk-pv.yaml", True)):
+              docs = carrega(arq)
+              app = "pr-42-exemplo" if pv else "exemplo"
+              deps = [d for d in docs if d["kind"] == "Deployment"]
+              if [d["metadata"]["name"] for d in deps] != [app + "-fila"]: falha(f"{arq}: deployments {deps}")
+              dep = deps[0]; pod = dep["spec"]["template"]; c = pod["spec"]["containers"][0]
+              ro = next(d for d in docs if d["kind"] == "Rollout")["spec"]["template"]["spec"]["containers"][0]
+              if c["image"] != ro["image"]: falha("a imagem do worker e a do app")
+              if c["args"] != ["worker"]: falha("args do worker")
+              if [p["containerPort"] for p in c["ports"]] != [9090]: falha("so a porta operacional")
+              if c["readinessProbe"]["httpGet"]["port"] != 9090 or c["livenessProbe"]["httpGet"]["port"] != 9090: falha("sondas")
+              if pod["spec"]["securityContext"] != next(d for d in docs if d["kind"] == "Rollout")["spec"]["template"]["spec"]["securityContext"]: falha("securityContext do pod")
+              if c["securityContext"] != ro["securityContext"]: falha("securityContext do container")
+              nomes_ro = [e["name"] for e in ro["env"]]; nomes = [e["name"] for e in c["env"]]
+              if nomes != nomes_ro + ["PAPEL"]: falha(f"env do worker: {nomes}")
+              env = {e["name"]: e for e in c["env"]}
+              esperado_a = "preview" if pv else "do-worker"
+              if env["A"].get("value") != esperado_a: falha(f"A: {env['A']}")
+              # A telemetria do worker nao se confunde com a da API.
+              env_ro = {e["name"]: e for e in ro["env"]}
+              if env_ro["OTEL_SERVICE_NAME"]["value"] != app: falha("o servico da API nao muda")
+              if env["OTEL_SERVICE_NAME"]["value"] != app + "-fila": falha(f"servico do worker: {env['OTEL_SERVICE_NAME']}")
+              if env["OTEL_RESOURCE_ATTRIBUTES"]["value"] != env_ro["OTEL_RESOURCE_ATTRIBUTES"]["value"] + ",app.kubernetes.io/component=fila": falha("atributos do worker")
+              segredo = "banco-app" if pv else "exemplo-fila-db"
+              if env["PGUSER"]["valueFrom"]["secretKeyRef"]["name"] != segredo: falha(f"credencial do banco: {env['PGUSER']}")
+              if pv and "exemplo-fila-db" in open(arq).read(): falha("credencial de producao do worker no preview")
+              if dep["spec"]["replicas"] != 1: falha("replicas")
+              svc = next(d for d in docs if d["kind"] == "Service")
+              if all(pod["metadata"]["labels"].get(k) == v for k, v in svc["spec"]["selector"].items()): falha("o Service do app alcanca o worker")
+              if pod["metadata"]["labels"]["app.kubernetes.io/component"] != "fila": falha("rotulo de componente")
+              aps = [d for d in docs if d["kind"] == "AuthorizationPolicy" and d["spec"]["selector"]["matchLabels"] == {"app": app + "-fila"}]
+              if len(aps) != 1 or aps[0]["spec"]["rules"] != [{"to": [{"operation": {"ports": ["15020", "15021", "15090"]}}]}]: falha("AuthorizationPolicy do worker")
+              if pv:
+                  np = next(d for d in docs if d["kind"] == "NetworkPolicy" and d["metadata"]["name"].endswith("-banco"))
+                  if not any(r["from"][0].get("podSelector", {}).get("matchExpressions") == [{"key": "app.kubernetes.io/component", "operator": "In", "values": ["fila"]}] for r in np["spec"]["ingress"]): falha("o worker nao alcanca o banco efemero")
+          print("workers ok")
+          FIMPY
+          recusa() { local m=$1; shift; local e; if e=$(helm template x charts/app "${base[@]}" "$@" 2>&1 >/dev/null); then echo "::error::aceitou: $*"; exit 1; fi; grep -qF -- "$m" <<<"$e" || { echo "::error::recusou por outro motivo: $e"; exit 1; }; }
+          recusa "falta command ou args" --set workers.fila.replicas=1
+          recusa "limits.memory" --set 'workers.fila.args[0]=w' --set workers.fila.resources.requests.cpu=10m
+          recusa "escrita pelo proprio chart" --set 'workers.fila.args[0]=w' --set 'workers.fila.env[0].name=DATABASE_URL' --set 'workers.fila.env[0].value=x'
+          recusa "invalid propertyName 'migration'" --set 'workers.migration.args[0]=w'
+          recusa "invalid propertyName 'Fila'" --set 'workers.Fila.args[0]=w'
+          recusa "workers.fila.probes.readiness: falta a sonda" "${wk[@]}" --set workers.fila.probes.readiness=null
+          recusa "workers.fila.probes.liveness: falta a sonda" "${wk[@]}" --set workers.fila.probes.liveness.path=
+          recusa "rollingUpdate so vale com type RollingUpdate" "${wk[@]}" --set workers.fila.strategy.type=Recreate --set workers.fila.strategy.rollingUpdate.maxSurge=1
+          recusa "at '/workers/fila/strategy/type'" "${wk[@]}" --set workers.fila.strategy.type=Outro
+          # Desligamento e estrategia: so aparecem quando declarados.
+          if grep -qE '^  strategy:$|terminationGracePeriodSeconds' <(sed -n '/^kind: Deployment$/,/^---$/p' "$T/wk.yaml"); then echo "::error::strategy ou prazo sem o campo"; exit 1; fi
+          helm template exemplo charts/app "${base[@]}" "${wk[@]}" --set workers.fila.strategy.type=Recreate --set workers.fila.terminationGracePeriodSeconds=90 > "$T/wk-rec.yaml"
+          python3 - <<'FIMPY'
+          import os, yaml
+          docs = [d for d in yaml.safe_load_all(open(os.environ["T"] + "/wk-rec.yaml")) if d]
+          dep = next(d for d in docs if d["kind"] == "Deployment")
+          if dep["spec"].get("strategy") != {"type": "Recreate"}: raise SystemExit("FALHA: strategy do worker")
+          if dep["spec"]["template"]["spec"].get("terminationGracePeriodSeconds") != 90: raise SystemExit("FALHA: prazo do worker")
+          print("desligamento do worker ok")
+          FIMPY
+
+      - name: Job de migracao
+        # O esquema muda num Job com credencial propria, que nenhum pod do app
+        # le, para o app rodar sem DDL. Producao: gancho PreSync. Preview: gancho Sync depois do banco
+        # efemero, com o app uma onda depois. Desligado, nada muda.
+        run: |
+          set -euo pipefail
+          # Um diretorio por run, e nao um caminho fixo: o validar-local roda
+          # estes passos no host, onde o /tmp sobrevive entre rodadas. Sem
+          # RUNNER_TEMP, o diretorio temporario e apagado na saida.
+          if [ -n "${RUNNER_TEMP:-}" ]; then T="$RUNNER_TEMP"; else T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT; fi
+          export T
+          base=(--set name=exemplo --set owner=equipe
+                --set image.repository=ghcr.io/slipalison/exemplo
+                --set image.tag=sha-abc1234 --set versao=1.2.3
+                --set database.enabled=true
+                --set 'env[0].name=SO_DO_APP' --set 'env[0].value=x'
+                --set 'envFrom[0].secretRef.name=exemplo-segredos')
+          mg=(--set migration.enabled=true --set 'migration.args[0]=migrate'
+              --set migration.database.secret=exemplo-dono-db
+              --set 'migration.env[0].name=MODO' --set 'migration.env[0].value=migracao')
+          pv=(--set preview.numero=42 --set preview.tag=pr-42-abcdef0)
+          helm template exemplo charts/app "${base[@]}" > "$T/mg-sem.yaml"
+          helm template exemplo charts/app "${base[@]}" --set migration.enabled=false --set 'migration.args[0]=migrate' > "$T/mg-desligado.yaml"
+          diff "$T/mg-sem.yaml" "$T/mg-desligado.yaml"
+          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" > "$T/mg-pv-sem.yaml"
+          if grep -q '^kind: Job$' "$T/mg-sem.yaml" "$T/mg-pv-sem.yaml"; then echo "::error::Job sem migration"; exit 1; fi
+          helm template exemplo charts/app "${base[@]}" "${mg[@]}" > "$T/mg.yaml"
+          helm template pr-42-exemplo charts/app "${base[@]}" "${mg[@]}" "${pv[@]}" --set 'workers.fila.args[0]=w' > "$T/mg-pv.yaml"
+          python3 - <<'FIMPY'
+          import os, yaml
+          T = os.environ["T"]
+          def falha(m): raise SystemExit("FALHA: " + m)
+          for arq, pv in ((f"{T}/mg.yaml", False), (f"{T}/mg-pv.yaml", True)):
+              docs = [d for d in yaml.safe_load_all(open(arq)) if d]
+              app = "pr-42-exemplo" if pv else "exemplo"
+              jobs = [d for d in docs if d["kind"] == "Job"]
+              if [j["metadata"]["name"] for j in jobs] != [app + "-migration"]: falha(f"{arq}: jobs")
+              j = jobs[0]; an = j["metadata"]["annotations"]; pod = j["spec"]["template"]
+              c = pod["spec"]["containers"][0]
+              ro = next(d for d in docs if d["kind"] == "Rollout")
+              if an.get("argocd.argoproj.io/hook-delete-policy") != "BeforeHookCreation": falha("apaga o Job anterior")
+              if pv:
+                  if an.get("argocd.argoproj.io/hook") != "Sync" or an.get("argocd.argoproj.io/sync-wave") != "1": falha(f"gancho do preview: {an}")
+                  for d in docs:
+                      if d["kind"] in ("Rollout", "Deployment") and d["metadata"].get("annotations", {}).get("argocd.argoproj.io/sync-wave") != "2":
+                          falha(f"{d['kind']} tem de vir depois da migracao")
+              else:
+                  if an.get("argocd.argoproj.io/hook") != "PreSync" or "argocd.argoproj.io/sync-wave" in an: falha(f"gancho de producao: {an}")
+                  if "annotations" in ro["metadata"]: falha("o Rollout de producao nao muda")
+              if c["image"] != ro["spec"]["template"]["spec"]["containers"][0]["image"]: falha("a imagem e a do app")
+              if c["args"] != ["migrate"]: falha("args")
+              if pod["spec"]["restartPolicy"] != "Never": falha("restartPolicy")
+              if pod["metadata"]["annotations"] != {"sidecar.istio.io/nativeSidecar": "true"}: falha("sidecar nativo, senao o Job nao termina")
+              if pod["spec"]["securityContext"] != ro["spec"]["template"]["spec"]["securityContext"]: falha("securityContext")
+              if "envFrom" in c: falha("o Job nao recebe o envFrom do app")
+              env = {e["name"]: e for e in c["env"]}
+              if "SO_DO_APP" in env: falha("o Job nao recebe o env do app")
+              if env.get("MODO", {}).get("value") != "migracao": falha("env proprio")
+              if env["OTEL_SERVICE_NAME"]["value"] != app + "-migration": falha(f"servico do Job: {env['OTEL_SERVICE_NAME']}")
+              if not env["OTEL_RESOURCE_ATTRIBUTES"]["value"].endswith(",app.kubernetes.io/component=migration"): falha("atributos do Job")
+              segredo = "banco-app" if pv else "exemplo-dono-db"
+              for k in ("PGUSER", "PGPASSWORD"):
+                  if env[k]["valueFrom"]["secretKeyRef"]["name"] != segredo: falha(f"{k}: {env[k]}")
+              if not pv and env["DATABASE_URL"]["valueFrom"]["secretKeyRef"]["name"] != segredo: falha("DATABASE_URL")
+              if pv and "exemplo-dono-db" in open(arq).read(): falha("credencial de producao da migracao no preview")
+              aps = [d for d in docs if d["kind"] == "AuthorizationPolicy" and d["spec"]["selector"]["matchLabels"] == {"app": app + "-migration"}]
+              if len(aps) != 1: falha("AuthorizationPolicy do Job")
+              if pv:
+                  np = next(d for d in docs if d["kind"] == "NetworkPolicy" and d["metadata"]["name"].endswith("-banco"))
+                  if not any(r["from"][0].get("podSelector", {}).get("matchExpressions") == [{"key": "app.kubernetes.io/component", "operator": "In", "values": ["fila", "migration"]}] for r in np["spec"]["ingress"]): falha("a migracao nao alcanca o banco efemero")
+          print("migracao ok")
+          FIMPY
+          # database.secret: o app (e o worker sem credencial propria) le outro
+          # Secret em producao; o DatabaseRole continua no <app>-db; no preview
+          # o campo some. Vazio, nada muda.
+          helm template exemplo charts/app "${base[@]}" --set database.secret= > "$T/mg-app-vazio.yaml"
+          diff "$T/mg-sem.yaml" "$T/mg-app-vazio.yaml"
+          helm template exemplo charts/app "${base[@]}" "${mg[@]}" --set database.secret=exemplo-api-db --set 'workers.fila.args[0]=w' > "$T/mg-app.yaml"
+          helm template pr-42-exemplo charts/app "${base[@]}" "${mg[@]}" "${pv[@]}" --set database.secret=exemplo-api-db > "$T/mg-app-pv.yaml"
+          if grep -n 'exemplo-api-db' "$T/mg-app-pv.yaml"; then echo "::error::database.secret de producao no preview"; exit 1; fi
+          python3 - <<'FIMPY'
+          import os, yaml
+          T = os.environ["T"]
+          def falha(m): raise SystemExit("FALHA: " + m)
+          docs = [d for d in yaml.safe_load_all(open(f"{T}/mg-app.yaml")) if d]
+          def pguser(kind):
+              d = next(d for d in docs if d["kind"] == kind)
+              env = {e["name"]: e for e in d["spec"]["template"]["spec"]["containers"][0]["env"]}
+              return env["PGUSER"]["valueFrom"]["secretKeyRef"]["name"]
+          if pguser("Rollout") != "exemplo-api-db": falha("o Rollout le database.secret")
+          if pguser("Deployment") != "exemplo-api-db": falha("o worker sem credencial propria le a do app")
+          if pguser("Job") != "exemplo-dono-db": falha("o Job le a da migracao")
+          role = next(d for d in docs if d["kind"] == "DatabaseRole")
+          if role["spec"]["passwordSecret"]["name"] != "exemplo-db": falha("o DatabaseRole continua no <app>-db")
+          print("database.secret ok")
+          FIMPY
+          # Tentativas: producao para na primeira falha; o preview tenta no
+          # minimo 3 vezes, porque o banco efemero acabou de nascer.
+          [ "$(grep -E '^  backoffLimit:' "$T/mg.yaml")" = "  backoffLimit: 0" ]
+          [ "$(grep -E '^  backoffLimit:' "$T/mg-pv.yaml")" = "  backoffLimit: 3" ]
+          helm template pr-42-exemplo charts/app "${base[@]}" "${mg[@]}" "${pv[@]}" --set migration.backoffLimit=5 > "$T/mg-pv-5.yaml"
+          [ "$(grep -E '^  backoffLimit:' "$T/mg-pv-5.yaml")" = "  backoffLimit: 5" ]
+          recusa() { local m=$1; shift; local e; if e=$(helm template x charts/app "${base[@]}" "$@" 2>&1 >/dev/null); then echo "::error::aceitou: $*"; exit 1; fi; grep -qF -- "$m" <<<"$e" || { echo "::error::recusou por outro motivo: $e"; exit 1; }; }
+          # O mesmo Secret no app e na migracao, pelos tres caminhos.
+          recusa "o mesmo Secret do app" "${mg[@]}" --set migration.database.secret=exemplo-db
+          recusa "o mesmo Secret do app" "${mg[@]}" --set database.secret=exemplo-dono-db
+          recusa "o mesmo Secret da migracao" "${mg[@]}" --set 'workers.fila.args[0]=w' --set workers.fila.database.secret=exemplo-dono-db
+          # Nem por outro caminho: o Secret da migracao em env, envFrom, env so do
+          # worker, anotacao do sidecar ou volume de um pod do app. Cada isca
+          # pela sua mensagem, com o pod e o caminho.
+          recusa "Rollout/exemplo le o Secret 'exemplo-dono-db' (env K), que e o da migracao" "${mg[@]}" --set 'env[1].name=K' --set 'env[1].valueFrom.secretKeyRef.name=exemplo-dono-db' --set 'env[1].valueFrom.secretKeyRef.key=k'
+          recusa "Rollout/exemplo le o Secret 'exemplo-dono-db' (envFrom), que e o da migracao" "${mg[@]}" --set 'envFrom[0].secretRef.name=exemplo-dono-db'
+          recusa "Deployment/exemplo-fila le o Secret 'exemplo-dono-db' (env K), que e o da migracao" "${mg[@]}" --set 'workers.fila.args[0]=w' --set 'workers.fila.env[0].name=K' --set 'workers.fila.env[0].valueFrom.secretKeyRef.name=exemplo-dono-db' --set 'workers.fila.env[0].valueFrom.secretKeyRef.key=k'
+          recusa "Deployment/exemplo-fila monta o Secret 'exemplo-dono-db' pela anotacao sidecar.istio.io/userVolume" "${mg[@]}" --set 'workers.fila.args[0]=w' --set-json 'workers.fila.podAnnotations={"sidecar.istio.io/userVolume":"[{\"name\":\"v\",\"secret\":{\"secretName\":\"exemplo-dono-db\"}}]"}'
+          helm template exemplo charts/app "${base[@]}" "${mg[@]}" --set-json 'podAnnotations={"sidecar.istio.io/userVolume":"[{\"name\":\"v\",\"secret\":{\"secretName\":\"exemplo-outro\"}}]"}' > /dev/null
+          rm -rf "$T/mg-chart"; cp -r charts/app "$T/mg-chart"
+          python3 .github/scripts/plantar.py "$T/mg-chart/templates/workers.yaml" volume "        - name: s|          secret:|            secretName: exemplo-dono-db"
+          e=$(helm template exemplo "$T/mg-chart" "${base[@]}" "${mg[@]}" --set 'workers.fila.args[0]=w' 2>&1 >/dev/null) && { echo "::error::aceitou o volume com o Secret da migracao"; exit 1; }
+          grep -qF "Deployment/exemplo-fila le o Secret 'exemplo-dono-db' (volume s), que e o da migracao" <<<"$e" || { echo "::error::recusou por outro motivo: $e"; exit 1; }
+          rm -rf "$T/mg-chart"
+          recusa "exige database.enabled" "${mg[@]}" --set database.enabled=false
+          recusa "falta command ou args" --set migration.enabled=true --set migration.database.secret=s
+          recusa "migration.database.secret e obrigatorio" --set migration.enabled=true --set 'migration.args[0]=m'
+          recusa "escrita pelo proprio chart" "${mg[@]}" --set 'migration.env[0].name=PGUSER'
+          recusa "limits.memory" "${mg[@]}" --set migration.resources.requests.cpu=1m
+          recusa "at '/migration/activeDeadlineSeconds'" "${mg[@]}" --set migration.activeDeadlineSeconds=3601
+
+      - name: Politicas do Kyverno nos pods
+        # O cluster recusa, em Enforce, o POD sem requests/limits, com
+        # :latest, como root, de registro desconhecido, e o workload sem os
+        # rotulos de dono. Quatro delas olham o pod: o apply sai verde e o pod
+        # e que nao nasce. O conferidor le cada modelo de pod do render e e
+        # provado pela isca antes (um defeito plantado por vez).
+        run: |
+          set -euo pipefail
+          bash .github/scripts/conferir-pods-isca.sh
+          if [ -n "${RUNNER_TEMP:-}" ]; then T="$RUNNER_TEMP"; else T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT; fi
+          export T
+          base=(--set name=exemplo --set owner=equipe
+                --set image.repository=ghcr.io/slipalison/exemplo
+                --set image.tag=sha-abc1234 --set database.enabled=true)
+          tudo=(--set 'workers.fila.args[0]=w' --set migration.enabled=true
+                --set 'migration.args[0]=m' --set migration.database.secret=s)
+          pv=(--set preview.numero=42 --set preview.tag=pr-42-abcdef0)
+          helm template exemplo charts/app "${base[@]}" > "$T/k-prod.yaml"
+          helm template exemplo charts/app "${base[@]}" "${tudo[@]}" > "$T/k-tudo.yaml"
+          helm template pr-42-exemplo charts/app "${base[@]}" "${pv[@]}" > "$T/k-pv.yaml"
+          helm template pr-42-exemplo charts/app "${base[@]}" "${tudo[@]}" "${pv[@]}" > "$T/k-pv-tudo.yaml"
+          python3 .github/scripts/conferir-pods.py "$T"/k-*.yaml
+
   publicar:
     name: Publicar OCI
     needs: [versao, lint]
@@ -156,6 +515,10 @@ jobs:
       - name: Preparar
         uses: slipalison/github-workflows/.github/actions/preparar@main
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        # Versao fixa: os passos conferem o texto dos erros do JSON Schema, e
+        # esse texto muda com o Helm. Subir aqui e subir junto o que se confere.
+        with:
+          version: v4.3.0
       - name: Login no GHCR
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}

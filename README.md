@@ -18,6 +18,8 @@ produz:
 | `AuthorizationPolicy` so-pelo-gateway | mTLS diz quem e; isto diz o que pode |
 | `PodDisruptionBudget` | Uma drenagem de no nao leva as duas replicas juntas |
 | `Database` do CloudNativePG | Banco, usuario e Secret criados com o app |
+| `Deployment` por worker, opcional | O mesmo binario em outro papel, com os cuidados do app e nenhuma porta de entrada |
+| `Job` de migracao, opcional | O esquema muda num gancho do Argo CD, com um Secret que nao e o do app; o app so fica sem DDL quando a credencial dele for de uma role sem DDL |
 | Variaveis `OTEL_*` apontando para o Alloy | O SDK do app acha o coletor sozinho, sem configuracao |
 
 ### Usar
@@ -114,7 +116,9 @@ database:
 O pod recebe `PGHOST`, `PGPORT`, `PGDATABASE` e `PGSSLMODE` em texto puro — o
 chart já sabe esses valores, e eles não ganham nada em virar Secret — mais
 `PGUSER`, `PGPASSWORD`, `DATABASE_URL` e `ConnectionStrings__Default` vindos do
-Secret `<app>-db`, **do próprio namespace**.
+Secret `<app>-db`, **do próprio namespace**. Com `database.secret`, o pod lê
+outro Secret, no mesmo formato, e o `<app>-db` fica só para a role do app (é o
+caso do app com Job de migração, mais abaixo).
 
 Não basta o `enabled: true`. A senha precisa existir selada nos dois lados, e
 quem faz isso é um comando só, que a sorteia e nunca a mostra:
@@ -180,7 +184,7 @@ igual** ao de antes deste bloco existir — conferido em `basalto`, `demo-python
 | Imagem e versao | `image.tag`, `versao` | `preview.tag`, que precisa ser `pr-<numero>-<7 hex>` |
 | Replicas | `replicas`, canary, HPA, PDB | 1, troca direta, sem HPA, sem PDB |
 | Banco | `Database` + `DatabaseRole` no cluster compartilhado | um `Cluster` do CNPG **dentro do namespace**, que morre com ele; o namespace nao ganha `db-access`, entao o banco de producao fica fora de alcance de rede |
-| `env` | a lista | a lista, com `preview.env` sobrepondo **pelo nome** |
+| `env` | a lista | a lista, com `preview.env` e `preview.secretEnv` sobrepondo **pelo nome** |
 | Telemetria | `deployment.environment=producao` | `preview`, e o `service.name` e o do preview |
 
 O banco efemero sai com o nome do banco e o dono de producao, credencial no
@@ -192,8 +196,246 @@ da NetworkPolicy padrao — a deles e a `-banco`, espelho da de `databases`.
 `preview.env` e um mapa, e nao uma lista, porque o Helm substitui listas: um
 `env:` no values do preview apagaria as variaveis de producao.
 
+#### Credenciais proprias do preview: `preview.secretEnv`
+
+`preview.env` so aceita valor em texto. Para a variavel que em producao vem de
+um Secret (uma chave de API, uma credencial de servico), o preview tinha duas
+saidas, e as duas sao ruins: receber uma **copia do Secret de producao** (o
+Kyverno copia para `pr-*` o Secret marcado com
+`preview.alisonamorim.com/copiar: "true"`), o que poe uma credencial de
+producao ao alcance de codigo ainda nao revisado — ou ficar sem a variavel, e o
+que depende dela nao se valida no preview.
+
+`preview.secretEnv` e a terceira: um mapa `nome: {secret, key}` que, **so no
+preview**, troca a variavel de mesmo nome por um `secretKeyRef` para um Secret
+do preview, com credenciais de teste.
+
+```yaml
+# apps/<app>/preview.yaml do homelab-gitops
+preview:
+  secretEnv:
+    CHAVE_DA_API:
+      secret: meu-app-preview   # Secret so de teste
+      key: CHAVE_DA_API
+      optional: false           # opcional
+```
+
+- A variavel coberta **some** do preview na forma de producao: o nome do Secret
+  de producao nao aparece no render, e nenhum pod do preview o referencia. O CI
+  confere.
+- Nome que nao existia em producao entra, como no `preview.env`.
+- Em producao o bloco nao muda uma linha.
+- Recusa no render: o mesmo nome em `preview.env` e em `preview.secretEnv`, um
+  nome que o proprio chart escreve (`APP_VERSION`, `OTEL_*`, `PG*`,
+  `DATABASE_URL`, `ConnectionStrings__Default`) e `secret`/`key` ausentes.
+
+**De onde vem o Secret do preview.** O chart nao o cria, pelo mesmo motivo do
+pull secret: um SealedSecret so decifra no namespace para o qual foi selado, e
+o namespace do preview nasce a cada PR. O caminho e um Secret **so de teste**,
+selado para o namespace de producao do app, com o rotulo de copia:
+
+```yaml
+# SealedSecret em apps/<app>/ (ou onde o app guarda os seus), namespace <app>
+spec:
+  template:
+    metadata:
+      name: meu-app-preview
+      labels:
+        preview.alisonamorim.com/copiar: "true"
+```
+
+O Kyverno o copia para cada `pr-*` quando o namespace nasce. O Secret de
+producao continua **sem** o rotulo, e por isso nunca chega ao preview. A copia
+e tirada uma vez (`synchronize: false`): trocar a credencial de teste vale para
+os previews novos; um aberto precisa renascer.
+
+#### O que o `secretEnv` nao cobre: `preview.secretsPermitidos`
+
+O `secretEnv` troca so as variaveis que ele nomeia. Uma referencia que ele nao
+cobre fica no preview com o nome do Secret de producao: uma variavel que so um
+worker tem, o `migration.env`, o `envFrom` (que os workers herdam), um `env`
+esquecido. Ligada por opcao, a lista fecha essa porta:
+
+```yaml
+# apps/<app>/preview.yaml do homelab-gitops
+preview:
+  secretEnv:
+    CHAVE_DA_API: {secret: meu-app-preview, key: CHAVE_DA_API}
+  secretsPermitidos: [meu-app-preview]   # presente, mesmo vazia, liga a conferencia
+```
+
+Com a lista presente, o render do **preview** falha se um pod do app — o
+Rollout, um worker ou o Job de migracao — ler um Secret fora de `banco-app` e
+da lista, por `env` (`secretKeyRef`), `envFrom` (`secretRef`) ou volume
+(`secret` e `projected`), em qualquer container ou initContainer. A mensagem
+diz o pod, o Secret e por onde. Falha tambem:
+
+- se um `secret` do `secretEnv` nao estiver na lista. O `secretEnv` e um mapa,
+  mesclado entre as camadas do preview, e uma delas e o values do proprio PR:
+  sem esta regra, um Secret de producao escrito ali por engano entraria na
+  lista sozinho;
+- se um pod usar a anotacao `sidecar.istio.io/userVolume` (em `podAnnotations`
+  ou em `workers.<chave>.podAnnotations`). Ela monta volume no sidecar, num
+  JSON que o chart nao confere.
+
+A conferencia le o pod como ele sai do render, e nao o values. Nao olha
+`imagePullSecrets` (quem le o pull secret e o kubelet, e nao o app), nem os
+pods do banco efemero. Sem a lista, ou em producao, o render nao muda uma
+linha.
+
+A lista diz quais Secrets o preview pode ler, e nao de onde eles vem: um nome
+listado ainda pode ser a copia de um Secret de producao, se ele tiver o rotulo
+de copia. Por isso ela so deve trazer Secrets **so de teste**.
+
 O desenho inteiro, com o que o app precisa ter para entrar, esta em
 `distros-setup/proxmox/PLANO-PREVIEW.md`.
+
+### Workers: o mesmo binario, outro papel
+
+`workers` declara Deployments extras com a **mesma imagem** do app e
+`command`/`args` proprios — o processo que consome uma fila, por exemplo. Cada
+chave e um worker, e o Deployment se chama `<name>-<chave>`. Mapa, e nao lista,
+pelo mesmo motivo do `preview.env`: o values do preview muda um campo de um
+worker sem reescrever os outros.
+
+```yaml
+probes:
+  port: 9090              # o worker sonda a mesma porta interna do app
+workers:
+  fila:
+    args: ["worker"]      # obrigatorio: command ou args
+    replicas: 1           # padrao 1; no preview, sempre 1
+    resources:            # padrao: os do app
+      requests: {cpu: 10m, memory: 32Mi}
+      limits: {memory: 128Mi}
+    env:                  # por cima do env do app, pelo nome
+      - name: PAPEL
+        value: fila
+    database:
+      secret: meu-app-fila-db   # credencial propria; padrao a do app
+    terminationGracePeriodSeconds: 60   # prazo depois do SIGTERM; padrao 30
+    strategy: {type: Recreate}          # padrao RollingUpdate
+```
+
+O worker precisa servir `/readyz` (ou o `path` das sondas) na porta
+operacional e terminar o que esta fazendo em ate
+`terminationGracePeriodSeconds` (30 s sem o campo) depois do SIGTERM. Com o
+`RollingUpdate` padrao, o worker velho e o novo rodam juntos durante o deploy;
+quando dois consumidores da mesma fila nao podem coexistir, use
+`strategy: {type: Recreate}`.
+
+| O worker herda do app | Por que |
+|---|---|
+| imagem e tag (no preview, a do PR), pull secret, ServiceAccount | E o mesmo binario; uma tag a parte deixaria o worker numa versao e o app em outra |
+| `securityContext` (nao-root, rootfs somente leitura, sem capability), `/tmp` em memoria | Os mesmos cuidados do Rollout, e o Kyverno recusa o pod sem eles |
+| o `env` inteiro: versao, OpenTelemetry, `env`, `preview.env`/`preview.secretEnv` e o banco | Uma variavel nova no app chega ao worker sem segunda edicao. O `env` do worker entra por cima, pelo nome; no preview, a sobreposicao do preview ganha dele. A telemetria sai como o servico `<name>-<chave>`, com `app.kubernetes.io/component=<chave>` nos atributos e o mesmo `service.namespace` do app, para nao se misturar com a da API |
+| a NetworkPolicy do namespace e o sidecar | O mesmo fechamento de rede e de saida |
+| `probes` e `podAnnotations`, com o que o worker sobrepoe | A raspagem por anotacao segue funcionando |
+
+O que ele **nao** tem: Service, rota, canary, HPA. Nenhum Service seleciona o
+pod (o rotulo `app` dele e `<name>-<chave>`), e a AuthorizationPolicy
+`<name>-<chave>-sem-entrada` so deixa passar as portas do sidecar — sem ela,
+um workload sem politica aceita tudo o que a NetworkPolicy deixar chegar. A
+porta declarada no container e so a das sondas e das metricas.
+
+No preview, a credencial do banco e sempre a do banco efemero (`banco-app`), e
+a NetworkPolicy `-banco` deixa os workers entrarem pela 5432.
+
+Recusa no render: worker sem `command` nem `args` (rodaria o app de novo), sem
+uma das duas sondas (`probes.readiness` ou `probes.liveness` sem `path`), com
+`strategy` de `type: Recreate` e `rollingUpdate`, com recursos sem
+`requests.cpu`, `requests.memory` e `limits.memory` (o Kyverno recusaria o pod,
+com o apply verde), com um `env` que nomeia variavel do chart (`DATABASE_URL`
+inclusive: a credencial muda por `workers.<chave>.database.secret`, que no
+preview da lugar ao banco efemero), e o nome `migration`, que e do Job de
+migracao.
+
+### Job de migracao: o esquema muda com credencial propria
+
+`migration` declara um Job que roda a migracao do banco com uma credencial
+**so dele** — a da role dona do esquema —, que nao chega a pod nenhum do app.
+
+O que o chart garante, e so isto: o Job, o app e cada worker leem Secrets de
+**nomes diferentes**. O render recusa o Secret de `migration.database.secret`
+em qualquer pod do app (o Rollout e os workers): como a credencial do banco
+(`database.secret`, o `<app>-db` padrao, `workers.<chave>.database.secret`), por
+`env` (`secretKeyRef`), por `envFrom` (que os workers herdam), pelo `env`
+proprio de um worker, por volume ou pela anotacao `sidecar.istio.io/userVolume`.
+A recusa le os pods como saem do render, e diz o pod e o caminho. No preview
+ela nao roda: ali a migracao e o app usam o `banco-app`, o do banco efemero.
+O que o chart **nao** garante: que o app fique sem DDL. Sem
+`database.secret`, o app le o `<app>-db`, que e a senha da role `<app>` — a
+dona do banco que o proprio chart declara. O app so fica sem DDL quando
+`database.secret` aponta para a credencial de uma role sem DDL, e essa role e
+os `GRANT` dela nascem fora do chart (na plataforma do banco, ou na propria
+migracao).
+
+```yaml
+database:
+  enabled: true           # obrigatorio
+  secret: meu-app-api-db  # o Secret do app em producao; vazio = <app>-db (a role dona)
+migration:
+  enabled: true
+  args: ["migrate"]       # obrigatorio: command ou args
+  database:
+    secret: meu-app-dono-db   # obrigatorio em producao; ignorado no preview
+  resources: {}           # vazio = os do app
+  env: []                 # por cima do que o chart escreve, pelo nome
+  backoffLimit: 0         # producao: quem tenta de novo e o retry do sync; preview: no minimo 3
+  activeDeadlineSeconds: 600   # de 60 a 3600
+```
+
+O Secret de `migration.database.secret` (e o de `database.secret`) fica no
+namespace do app, no mesmo formato do `<app>-db` (`username`, `password`,
+`DATABASE_URL`, `ConnectionStrings__Default`), e nasce de um SealedSecret, como
+ele. O chart nao cria a role dona nem a role do app: as duas sao da plataforma
+do banco.
+
+| | Producao | Preview |
+|---|---|---|
+| Gancho do Argo CD | `PreSync`: roda e termina antes de qualquer outro objeto do sync; se falha, o sync para e a imagem nova nao sobe | `Sync`, onda 1; o Rollout e os workers vao para a onda 2 |
+| Por que diferente | — | O namespace (onda -2) e o banco efemero (onda -1) nascem no mesmo sync, e um `PreSync` rodaria antes de os dois existirem |
+| Credencial | `migration.database.secret` | `banco-app`, a do banco efemero |
+| Tentativas | `backoffLimit` (0): a falha para o sync | no minimo 3, com espera crescente (10 s, 20 s, 40 s): o banco efemero pode levar alguns segundos a mais que o `Cluster` para aceitar conexao |
+| Job anterior | `BeforeHookCreation`: apagado quando o proximo nasce; o ultimo fica, com o log | igual |
+
+O Job recebe a versao, a fiacao do OpenTelemetry (como o servico
+`<name>-migration`, com `app.kubernetes.io/component=migration`), o endereco do
+banco, a credencial e `migration.env` — e **nao** recebe o `env` nem o `envFrom` do app:
+as chaves e credenciais do app nao tem o que fazer numa migracao. Fica na
+malha, com o sidecar **nativo** (`sidecar.istio.io/nativeSidecar: "true"`):
+o proxy sai quando o container termina. Sem sidecar nativo o Envoy seguiria de
+pe e o Job so acabaria no `activeDeadlineSeconds`, como falha. Uma
+AuthorizationPolicy `<name>-migration-sem-entrada` fecha a entrada, e no
+preview a NetworkPolicy `-banco` deixa o Job entrar pela 5432.
+
+Quatro ressalvas, ditas de proposito:
+
+- **A migracao precisa ser idempotente: roda a cada sync.** O gancho roda em
+  todo sync do Argo CD, inclusive nos do `selfHeal`, e nao so quando a imagem
+  muda. Rodar de novo sobre um esquema ja migrado tem de ser um nada.
+- **No primeiro sync de um app novo, o `PreSync` nao tem onde rodar**: o
+  namespace e do chart e so nasce na fase Sync, e o sync para no gancho antes
+  de chegar la — o retry repete a mesma falha. Ligue `migration` num app que
+  ja sincronizou uma vez. O preview nao tem esse problema, pelo gancho `Sync`.
+- **A imagem nova migra antes de o canary comecar.** Durante o canary, os pods
+  da versao anterior rodam sobre o esquema novo: a migracao precisa ser
+  compativel com a versao anterior (expandir antes, contrair num deploy
+  seguinte).
+- **O preview tolera o que a producao nao tolera.** No preview o Job tenta no
+  minimo 4 vezes; em producao, com o `backoffLimit` padrao (0), uma so. Uma
+  migracao intermitente, ou uma nao transacional que falha pela metade e passa
+  na segunda vez, fica verde no preview e quebra em producao, onde nao ha nova
+  tentativa. Uma migracao que so passa na segunda tentativa esta quebrada para
+  producao: confira o log do Job no `pr-*` (o pod de cada tentativa fica no
+  namespace ate o proximo sync).
+
+Recusa no render: `migration` sem `database.enabled`, sem `command` nem `args`
+(rodaria o app, que nao termina), sem `migration.database.secret` em producao,
+com o mesmo Secret do app (`database.secret`, ou `<app>-db` sem ele) ou de um
+worker, com o Secret da migracao lido por qualquer pod do app (`env`,
+`envFrom`, volume ou `sidecar.istio.io/userVolume`), com recursos incompletos
+ou com `env` que nomeia variavel do chart.
 
 ### O que o chart NAO deixa voce fazer
 
@@ -205,6 +447,34 @@ Por desenho, e cada um ja custou caro a alguem:
 - **sair para qualquer lugar** — o egresso externo precisa estar em
   `.Values.egress`, e as faixas de casa e da tailnet ficam de fora sempre.
 - **ser chamado por outro app** — so o gateway entra.
+
+### As politicas do Kyverno, conferidas no render
+
+O cluster aplica cinco politicas em modo Enforce, e quatro olham o **pod**: o
+`apply` de um Deployment ou de um Job sai verde, e o pod e que e recusado ao
+nascer. `.github/scripts/conferir-pods.py` le cada modelo de pod de um render
+(Rollout, Deployment, StatefulSet, DaemonSet, Job, CronJob, e a imagem e os
+recursos do Cluster do CloudNativePG) e reprova:
+
+| Politica | O que o conferidor exige |
+|---|---|
+| `exige-requests-e-limits` | `requests.cpu`, `requests.memory` e `limits.memory` em todo container e initContainer |
+| `proibe-tag-latest` | tag fixa ou digest; sem tag e `:latest` implicito |
+| `exige-nao-root` | `runAsNonRoot: true` no pod, ou em todo container |
+| `registro-permitido` | imagem de `ghcr.io/slipalison/*` ou `ghcr.io/cloudnative-pg/*` (outra lista: `REGISTROS_PERMITIDOS`, padroes separados por espaco) |
+| `exige-rotulos` | `app.kubernetes.io/name` e `owner` no Deployment, StatefulSet, DaemonSet e Rollout |
+
+```bash
+helm template meu-app charts/app -f values.yaml > render.yaml
+python3 .github/scripts/conferir-pods.py render.yaml
+```
+
+Ele nao ve o que o Istio injeta nem os pods que o operador do CloudNativePG cria.
+A isca, `.github/scripts/conferir-pods-isca.sh`, roda no CI antes de qualquer
+render ser conferido: o render limpo passa, onze copias com um defeito
+plantado cada uma (duas delas no `Cluster` do banco efemero do preview) sao
+reprovadas pela politica certa, e os valores que plantariam esses defeitos ja
+sao recusados pelo chart.
 
 ### Publicar uma versao
 

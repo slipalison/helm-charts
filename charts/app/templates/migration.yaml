@@ -1,0 +1,187 @@
+{{- /*
+JOB DE MIGRACAO: o esquema do banco muda aqui, com uma credencial que e SO
+DELE: o render recusa o Secret de `migration.database.secret` em qualquer pod
+do app (o Rollout e os workers), seja como a credencial do banco, seja por
+`env`, `envFrom`, volume ou `sidecar.istio.io/userVolume`. Para o app rodar
+com uma role SEM DDL, a credencial dele (`database.secret`) tem de ser de uma
+role sem DDL; o chart nao cria essa role nem confere o que ela pode.
+
+  - Producao: gancho PreSync do Argo CD. O Argo roda o Job e espera ele
+    terminar antes de aplicar qualquer outro objeto; se a migracao falha, o
+    sync para ali, e a imagem nova nao sobe sobre um esquema velho.
+  - Preview: gancho Sync na onda 1. O namespace e o banco efemero nascem no
+    mesmo sync (ondas -2 e -1), e um PreSync rodaria antes deles. O app e os
+    workers vao para a onda 2 (`app.ondaDosWorkloads`). Mesmo Job, mesma
+    imagem, mesmo comando, contra o banco efemero: o preview prova o caminho
+    de producao.
+  - `BeforeHookCreation`: o Job anterior e apagado quando o proximo e criado.
+    O ultimo fica no namespace, com o log, ate o sync seguinte.
+
+O que ele recebe, e o que NAO recebe: a versao, o nome, a fiacao do
+OpenTelemetry, o endereco do banco e a credencial de `migration.database.secret`
+(no preview, a do banco efemero), mais `migration.env`. NAO recebe o `env` nem o
+`envFrom` do app: as chaves e credenciais do app nao tem o que fazer numa
+migracao.
+
+Fica na malha, com o sidecar NATIVO (`sidecar.istio.io/nativeSidecar`): o
+proxy sai sozinho quando o container termina, e o Job conclui. Sem o sidecar
+nativo, o Envoy seguiria de pe e o Job nunca terminaria.
+*/ -}}
+{{- if include "app.migracao" . }}
+{{- $m := .Values.migration }}
+{{- if not .Values.database.enabled }}
+{{- fail "migration.enabled exige database.enabled: o Job migra o banco do app." }}
+{{- end }}
+{{- if not (or $m.command $m.args) }}
+{{- fail "migration: falta command ou args. Sem eles o Job roda o entrypoint da imagem, que e o proprio app, e nunca termina." }}
+{{- end }}
+{{- $app := include "app.name" . }}
+{{- $jnome := printf "%s-migration" $app }}
+{{- $preview := include "app.emPreview" . }}
+{{- $segredo := include "app.dbSecret" . }}
+{{- if not (include "app.bancoPreview" .) }}
+{{- $segredo = required "migration.database.secret e obrigatorio: e a credencial propria da migracao (a role dona do esquema), num Secret do namespace do app com username, password, DATABASE_URL e ConnectionStrings__Default." ($m.database | default dict).secret }}
+{{- /*
+A mesma credencial no app e na migracao anula a separacao: o app teria a role
+da migracao, com DDL. O chart so ve NOMES de Secret, entao e isso que ele
+recusa; que a role do app nao tenha DDL depende do que a credencial dela
+autentica, e isso fica fora do chart.
+*/}}
+{{- $doApp := include "app.dbSecretDoApp" . }}
+{{- if eq $segredo $doApp }}
+{{- fail (printf "migration.database.secret e '%s', o mesmo Secret do app. A migracao precisa de credencial propria: troque a do app por database.secret, ou a da migracao." $segredo) }}
+{{- end }}
+{{- range $nome, $w := .Values.workers }}
+{{- if and $w $w.database (eq ($w.database.secret | default "") $segredo) }}
+{{- fail (printf "workers.%s.database.secret e '%s', o mesmo Secret da migracao. O worker precisa de outra credencial." $nome $segredo) }}
+{{- end }}
+{{- end }}
+{{- /*
+Nem por outro caminho: um `env` com `secretKeyRef`, um `envFrom` (que os
+workers herdam), o `env` proprio de um worker, um volume ou a anotacao
+`sidecar.istio.io/userVolume`. Le os pods como saem do render (o helper
+`app.secretsDosPods`), e nao o values. No preview isto nao roda: a credencial
+da migracao e a do banco efemero, a mesma do app.
+*/}}
+{{- $lidos := include "app.secretsDosPods" (dict "ctx" . "arquivos" (list "rollout.yaml" "workers.yaml")) | fromYaml }}
+{{- range $r := $lidos.refs }}
+{{- if eq $r.secret $segredo }}
+{{- fail (printf "%s le o Secret '%s' (%s), que e o da migracao. A credencial da migracao nao vai para o app nem para os workers." $r.onde $r.secret $r.caminho) }}
+{{- end }}
+{{- end }}
+{{- range $u := $lidos.userVolume }}
+{{- if contains (printf "%q" $segredo) $u.valor }}
+{{- fail (printf "%s monta o Secret '%s' pela anotacao sidecar.istio.io/userVolume, e ele e o da migracao. A credencial da migracao nao vai para o app nem para os workers." $u.onde $segredo) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $recursos := $m.resources | default .Values.resources }}
+{{- include "app.exigeRecursos" (dict "onde" "migration" "recursos" $recursos) }}
+{{- $env := include "app.envComProprio" (dict "ctx" . "onde" "migration" "base" (include "app.env" (dict "ctx" . "segredoBanco" $segredo "semEnvDoApp" true "componente" "migration")) "proprio" ($m.env | default list)) | fromYamlArray }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $jnome }}
+  namespace: {{ $app }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migration
+  annotations:
+    {{- if $preview }}
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "1"
+    {{- else }}
+    argocd.argoproj.io/hook: PreSync
+    {{- end }}
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  {{- /*
+  Producao: `migration.backoffLimit` (0 por padrao). A migracao que falha para
+  o sync, e quem tenta de novo e o retry do Argo CD.
+  Preview: no minimo 3. O Argo CD so passa da onda -1 com o Cluster do CNPG
+  saudavel (o health dele vem embutido no Argo CD), mas o Service `banco-rw`
+  pode levar alguns segundos a mais para aceitar conexao, e um Job que falha de
+  primeira derrubaria o sync. Cada tentativa e um pod novo, com espera
+  crescente do proprio Kubernetes (10 s, 20 s, 40 s), dentro do
+  activeDeadlineSeconds. Repetir e seguro ali: o banco e efemero, e a migracao
+  ja precisa ser idempotente, porque roda a cada sync.
+  */}}
+  backoffLimit: {{ if $preview }}{{ max 3 ($m.backoffLimit | default 0 | int) }}{{ else }}{{ $m.backoffLimit | default 0 }}{{ end }}
+  activeDeadlineSeconds: {{ $m.activeDeadlineSeconds | default 600 }}
+  template:
+    metadata:
+      labels:
+        {{- include "app.labels" . | nindent 8 }}
+        app.kubernetes.io/component: migration
+        app: {{ $jnome }}
+      annotations:
+        sidecar.istio.io/nativeSidecar: "true"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $app }}
+      {{- with .Values.image.pullSecret }}
+      imagePullSecrets:
+        - name: {{ . }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: migration
+          image: "{{ .Values.image.repository }}:{{ include "app.tag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with $m.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $m.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            {{- toYaml $env | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml $recursos | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# Ninguem chama o Job. Como a dos workers: so as portas do proprio sidecar.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $jnome }}-sem-entrada
+  namespace: {{ $app }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migration
+spec:
+  selector:
+    matchLabels:
+      app: {{ $jnome }}
+  action: ALLOW
+  rules:
+    - to:
+        - operation:
+            ports: ["15020", "15021", "15090"]
+{{- end }}

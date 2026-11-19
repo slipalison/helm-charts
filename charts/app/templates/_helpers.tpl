@@ -152,6 +152,24 @@ banco-app
 {{- end -}}
 
 {{/*
+O Secret que o APP le (o Rollout, e os workers que nao trocam o seu). Em
+producao e `database.secret`, quando preenchido; senao o `<app>-db` acima, que
+e a senha da role `<app>`, DONA do banco. No preview, sempre o `banco-app`.
+
+Existe para o app que roda com o Job de migracao: o Job usa a credencial da
+role dona, e o app passa a usar a de outra role. O chart nao cria essa outra
+role nem confere o que ela pode: so garante que o app e a migracao nao leem o
+mesmo Secret (migration.yaml recusa).
+*/}}
+{{- define "app.dbSecretDoApp" -}}
+{{- if and .Values.database.secret (not (include "app.bancoPreview" .)) -}}
+{{- .Values.database.secret -}}
+{{- else -}}
+{{- include "app.dbSecret" . -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Nome do banco. Sai do values, mas o padrao e o nome do app.
 */}}
 {{- define "app.dbName" -}}

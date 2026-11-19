@@ -114,6 +114,12 @@ database:
   # consome o cluster inteiro e derruba os outros, inclusive o proprio
   # operador. Este numero e o que impede isso.
   connectionLimit: 20
+  # Secret que o APP le em producao (o Rollout, e os workers que nao trocam o
+  # seu). Vazio = `<app>-db`, a senha da role `<app>`, que e DONA do banco. E o
+  # campo para o app que roda com o Job de migracao: o Job fica com a role
+  # dona, e o app passa a uma role sem DDL, criada fora do chart. Mesmo
+  # formato do `<app>-db`. Ignorado no preview (la e o banco efemero).
+  secret: ""
 
 # LIGAR O BANCO NUM APP: nao basta `enabled: true`. A senha precisa existir
 # selada em DOIS namespaces (em `databases`, para o operador criar a role; no
@@ -161,7 +167,8 @@ owner: alison
 #   - uma replica, sem canary, sem HPA, sem PDB;
 #   - com `database.enabled`, um Postgres efemero DENTRO do namespace, e nunca o
 #     banco de producao — que fica ate fora de alcance de rede;
-#   - `preview.env` sobrepoe o `env` pelo nome.
+#   - `preview.env` e `preview.secretEnv` sobrepoem o `env` pelo nome;
+#   - com `preview.secretsPermitidos`, nenhum pod le Secret fora da lista.
 # Desenho completo: distros-setup/proxmox/PLANO-PREVIEW.md.
 preview:
   numero: ""
@@ -170,6 +177,31 @@ preview:
   # mapa, e nao lista, porque o Helm substitui listas inteiras: um `env:` aqui
   # apagaria as variaveis de producao. Ex.: o client_id de um login de teste.
   env: {}
+  # CREDENCIAIS PROPRIAS DO PREVIEW, como MAPA nome: {secret, key}. Cada
+  # variavel aqui SUBSTITUI a de mesmo nome do `env` de producao (ou entra, se
+  # nao existia) com um `secretKeyRef` para um Secret DO PREVIEW. E o jeito de o
+  # preview receber chaves e credenciais de teste em vez de uma copia do Secret
+  # de producao: com a variavel coberta aqui, o Secret de producao nem aparece
+  # no render do preview.
+  #
+  # O Secret nomeado precisa existir no namespace `pr-*`. O chart nao o cria
+  # (o chart e publico, e um SealedSecret so decifra no namespace para o qual
+  # foi selado): o caminho e um Secret SO DE TESTE no namespace de producao do
+  # app, com o rotulo de copia do Kyverno. Ver o README.
+  #
+  #   secretEnv:
+  #     CHAVE_DA_API:
+  #       secret: meu-app-preview
+  #       key: CHAVE_DA_API
+  #       optional: false     # opcional; o padrao do Kubernetes e false
+  secretEnv: {}
+  # LISTA DE SECRETS PERMITIDOS NO PREVIEW, ligada por opcao. Presente (mesmo
+  # vazia), o render do preview falha se um pod do app (Rollout, worker, Job)
+  # ler, por env, envFrom ou volume, um Secret fora de `banco-app` e desta
+  # lista, se um `secret` do `secretEnv` nao estiver nela, ou se um pod usar a
+  # anotacao `sidecar.istio.io/userVolume`. E o que fecha o que o `secretEnv`
+  # nao cobre. Comentado de proposito: a ausencia desliga a conferencia.
+  # secretsPermitidos: [meu-app-preview]
   banco:
     # A mesma imagem do cluster de producao (homelab-gitops,
     # platform/postgres/manifests/cluster.yaml). Mudou la, muda aqui.
@@ -181,6 +213,77 @@ preview:
         memory: 96Mi
       limits:
         memory: 256Mi
+
+# WORKERS — Deployments extras com a MESMA imagem e `command`/`args` proprios:
+# o processo que consome uma fila, por exemplo. Cada chave e um worker, e o
+# Deployment se chama `<name>-<chave>`. Mapa, e nao lista, para o values do
+# preview poder mudar um campo de um worker sem reescrever os outros.
+#
+# O worker herda do app a imagem (no preview, a do PR), o pull secret, o
+# securityContext, a NetworkPolicy, o sidecar e o `env` inteiro (versao,
+# OpenTelemetry, `env`, as sobreposicoes do preview e o banco); a telemetria
+# sai como o servico `<name>-<chave>`, para nao se misturar com a da API. Nao tem
+# Service nem rota: ninguem de fora fala com ele, e a AuthorizationPolicy dele
+# so deixa passar as portas do sidecar. No preview, uma replica.
+#
+#   workers:
+#     fila:
+#       args: ["worker"]          # obrigatorio: command ou args
+#       replicas: 1               # padrao 1
+#       port: 9090                # sondas e metricas; padrao probes.port, ou port
+#       resources:                # padrao: os do app. O Kyverno exige os tres
+#         requests: {cpu: 10m, memory: 32Mi}
+#         limits: {memory: 128Mi}
+#       env:                      # por cima do env do app, pelo nome
+#         - name: PAPEL
+#           value: fila
+#       database:
+#         secret: meu-app-fila-db # credencial propria; padrao a do app
+#       probes: {}                # sobrepoe `probes` campo a campo; as duas
+#                                 # sondas HTTP sao obrigatorias
+#       podAnnotations: {}        # sobrepoe `podAnnotations`
+#       terminationGracePeriodSeconds: 60   # prazo depois do SIGTERM; padrao 30
+#       strategy: {type: Recreate}          # padrao RollingUpdate
+workers: {}
+
+# JOB DE MIGRACAO — o esquema do banco muda aqui, com uma credencial so dele.
+# O chart recusa o mesmo Secret no Job e no app (`database.secret`) ou num
+# worker. Que o app fique sem DDL depende de a credencial DELE ser de uma role
+# sem DDL, criada fora do chart. Exige `database.enabled`.
+#
+# Em producao e um gancho PreSync do Argo CD: roda e termina antes de qualquer
+# outro objeto do sync, e se falha o sync para. No preview e um gancho Sync
+# depois do banco efemero, com o app e os workers uma onda depois, contra o
+# banco efemero e com a credencial dele.
+#
+# O Job recebe a versao, o OpenTelemetry, o endereco do banco, a credencial de
+# `migration.database.secret` e `migration.env` — e NAO o `env` nem o
+# `envFrom` do app.
+migration:
+  enabled: false
+  # Obrigatorio: command ou args. Sem eles o Job rodaria o app, que nao termina.
+  command: []
+  args: []
+  # Por cima do que o chart escreve, pelo nome. Nao pode nomear variavel do
+  # chart (APP_VERSION, OTEL_*, PG*, DATABASE_URL...).
+  env: []
+  # Vazio = os do app. O Kyverno exige requests.cpu, requests.memory e
+  # limits.memory.
+  resources: {}
+  database:
+    # Secret NO NAMESPACE DO APP com a credencial da role dona do esquema, no
+    # mesmo formato do `<app>-db`: username, password, DATABASE_URL e
+    # ConnectionStrings__Default. Obrigatorio em producao, e outro que o do
+    # app (`database.secret`) e o de cada worker. No preview e
+    # ignorado (a credencial e a do banco efemero).
+    secret: ""
+  # 0: em producao, uma migracao que falha nao e repetida pelo Job. Quem tenta
+  # de novo e o retry do sync do Argo CD, que recria o Job. No preview e no
+  # minimo 3, com espera crescente entre as tentativas: o banco efemero acabou
+  # de nascer e pode levar alguns segundos para aceitar conexao.
+  backoffLimit: 0
+  # Teto do Job, de 60 a 3600 s. Um PreSync preso segura o sync inteiro.
+  activeDeadlineSeconds: 600
 
 podAnnotations: {}
 nodeSelector: {}

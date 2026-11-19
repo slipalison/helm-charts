@@ -82,6 +82,11 @@
         },
         "cluster": { "type": "string", "minLength": 1 },
         "clusterNamespace": { "type": "string", "minLength": 1 },
+        "secret": {
+          "type": "string",
+          "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$",
+          "description": "Secret, no namespace do app, que o Rollout le em producao. Vazio = <app>-db, a credencial da role dona. Ignorado no preview."
+        },
         "connectionLimit": {
           "type": "integer",
           "minimum": 1,
@@ -99,6 +104,71 @@
           "host": { "type": "string" },
           "port": { "type": "integer" }
         }
+      }
+    },
+    "workers": {
+      "type": "object",
+      "description": "Deployments extras com a mesma imagem e command/args proprios. A chave e o nome do worker; o Deployment se chama <name>-<chave>.",
+      "propertyNames": { "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 20, "not": { "const": "migration" } },
+      "additionalProperties": {
+        "type": ["object", "null"],
+        "additionalProperties": false,
+        "properties": {
+          "command": { "type": "array", "items": { "type": "string" } },
+          "args": { "type": "array", "items": { "type": "string" } },
+          "replicas": { "type": "integer", "minimum": 1 },
+          "port": { "type": "integer", "minimum": 1024, "maximum": 65535 },
+          "resources": { "type": "object" },
+          "env": {
+            "type": "array",
+            "items": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" } } }
+          },
+          "database": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": { "secret": { "type": "string", "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$" } }
+          },
+          "probes": { "type": "object" },
+          "podAnnotations": { "type": "object" },
+          "terminationGracePeriodSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3600,
+            "description": "Prazo, depois do SIGTERM, para o worker terminar o que esta fazendo. Ausente = 30 s, o padrao do Kubernetes."
+          },
+          "strategy": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type"],
+            "properties": {
+              "type": { "enum": ["Recreate", "RollingUpdate"] },
+              "rollingUpdate": { "type": "object" }
+            },
+            "description": "Estrategia do Deployment. Ausente = RollingUpdate padrao (maxSurge 25%), em que o worker velho e o novo rodam juntos por um tempo."
+          }
+        }
+      }
+    },
+    "migration": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Job de migracao com gancho do Argo CD e credencial propria do banco.",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "command": { "type": "array", "items": { "type": "string" } },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "env": {
+          "type": "array",
+          "items": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" } } }
+        },
+        "resources": { "type": "object" },
+        "database": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "secret": { "type": "string", "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$" } }
+        },
+        "backoffLimit": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "activeDeadlineSeconds": { "type": "integer", "minimum": 60, "maximum": 3600 }
       }
     },
     "preview": {
@@ -120,6 +190,26 @@
           "type": "object",
           "additionalProperties": { "type": ["string", "number", "boolean"] },
           "description": "Mapa nome: valor que sobrepoe o env pelo nome, so no preview. Mapa porque o Helm substitui listas inteiras."
+        },
+        "secretEnv": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["secret", "key"],
+            "properties": {
+              "secret": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$", "maxLength": 253 },
+              "key": { "type": "string", "pattern": "^[-._a-zA-Z0-9]+$" },
+              "optional": { "type": "boolean" }
+            }
+          },
+          "description": "Mapa nome: {secret, key} que sobrepoe o env pelo nome com um secretKeyRef, so no preview. Para o preview ler credenciais proprias, de teste, em vez de uma copia do Secret de producao."
+        },
+        "secretsPermitidos": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$", "maxLength": 253 },
+          "description": "Ligado por opcao: presente (mesmo vazia), o render do preview falha se um pod do app ler um Secret fora de banco-app e desta lista, se um secret de secretEnv nao estiver nela, ou se um pod usar a anotacao sidecar.istio.io/userVolume."
         },
         "banco": {
           "type": "object",
